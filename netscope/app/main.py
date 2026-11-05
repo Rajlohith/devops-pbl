@@ -1,8 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import health
-
-from .api.routes import packets
+from app.api.routes import health, packets
 
 app = FastAPI(
     title="NetScope API",
