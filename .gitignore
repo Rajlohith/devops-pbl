@@ -1,3 +1,11 @@
 .vscode/
 __pycache__/
-.github/
+*.pyc
+.venv/
+.env
+.pytest_cache/
+netscope/instance/
+*.pcap
+*.pcapng
+!netscope/tests/fixtures/*.pcap
+!netscope/tests/fixtures/*.pcapng

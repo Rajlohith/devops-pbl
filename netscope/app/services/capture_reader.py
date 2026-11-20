@@ -1,8 +1,9 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from scapy.packet import Packet
-from scapy.utils import PcapNgReader, PcapReader
+if TYPE_CHECKING:
+    from scapy.packet import Packet
 
 
 class CaptureReadError(Exception):
@@ -50,7 +51,9 @@ def _detect_capture_format(path: Path) -> str:
 
 
 def _validate_pcap_structure(path: Path) -> None:
+    """Check PCAP record framing using seeks, never reading packet bodies."""
     try:
+        file_size = path.stat().st_size
         with path.open("rb") as capture_file:
             header = capture_file.read(24)
             if len(header) < 24:
@@ -82,22 +85,33 @@ def _validate_pcap_structure(path: Path) -> None:
                         "PCAP captured length exceeds original length: "
                         f"{path}"
                     )
-                if captured_length > snap_length:
+                # Some tools write a snapshot length of 0 meaning "unset".
+                if snap_length and captured_length > snap_length:
                     raise CaptureReadError(
                         f"PCAP packet length exceeds snapshot length: {path}"
                     )
-                packet_data = capture_file.read(captured_length)
-                if len(packet_data) < captured_length:
+                packet_end = capture_file.tell() + captured_length
+                if packet_end > file_size:
                     raise CaptureReadError(f"PCAP file is truncated: {path}")
+                capture_file.seek(packet_end)
     except OSError as exc:
         raise CaptureReadError(f"Unable to read capture file: {path}") from exc
 
 
+_PCAPNG_BYTE_ORDERS = {
+    b"\x1a\x2b\x3c\x4d": "big",
+    b"\x4d\x3c\x2b\x1a": "little",
+}
+
+
 def _validate_pcapng_structure(path: Path) -> None:
+    """Check PCAPNG block framing using seeks, never reading block bodies."""
     try:
+        file_size = path.stat().st_size
         with path.open("rb") as capture_file:
             byte_order = None
             while True:
+                block_start = capture_file.tell()
                 block_type = capture_file.read(4)
                 if not block_type:
                     return
@@ -110,10 +124,7 @@ def _validate_pcapng_structure(path: Path) -> None:
                         raise CaptureReadError(
                             f"PCAPNG file is truncated: {path}"
                         )
-                    byte_order = {
-                        b"\x1a\x2b\x3c\x4d": "big",
-                        b"\x4d\x3c\x2b\x1a": "little",
-                    }.get(section_header[4:8])
+                    byte_order = _PCAPNG_BYTE_ORDERS.get(section_header[4:8])
                     if byte_order is None:
                         raise CaptureReadError(
                             "PCAPNG file has an invalid byte-order marker: "
@@ -123,14 +134,7 @@ def _validate_pcapng_structure(path: Path) -> None:
                         section_header[:4],
                         byte_order,
                     )
-                    if block_length < 28 or block_length % 4:
-                        raise CaptureReadError(
-                            f"PCAPNG file has an invalid block length: {path}"
-                        )
-                    block_body = capture_file.read(block_length - 12)
-                    block_tail = (
-                        block_body[-4:] if len(block_body) >= 4 else b""
-                    )
+                    minimum_length = 28
                 else:
                     if byte_order is None:
                         raise CaptureReadError(
@@ -143,32 +147,32 @@ def _validate_pcapng_structure(path: Path) -> None:
                             f"PCAPNG file is truncated: {path}"
                         )
                     block_length = int.from_bytes(length_bytes, byte_order)
-                    if block_length < 12 or block_length % 4:
-                        raise CaptureReadError(
-                            f"PCAPNG file has an invalid block length: {path}"
-                        )
-                    block_body = capture_file.read(block_length - 8)
-                    block_tail = (
-                        block_body[-4:] if len(block_body) >= 4 else b""
-                    )
+                    minimum_length = 12
 
-                expected_body_length = (
-                    block_length - 12
-                    if block_type == _PCAPNG_BLOCK_TYPE
-                    else block_length - 8
-                )
-                if len(block_body) < expected_body_length:
+                if block_length < minimum_length or block_length % 4:
+                    raise CaptureReadError(
+                        f"PCAPNG file has an invalid block length: {path}"
+                    )
+                block_end = block_start + block_length
+                if block_end > file_size:
                     raise CaptureReadError(f"PCAPNG file is truncated: {path}")
-                if int.from_bytes(block_tail, byte_order) != block_length:
+
+                capture_file.seek(block_end - 4)
+                trailing_length = capture_file.read(4)
+                if int.from_bytes(trailing_length, byte_order) != block_length:
                     raise CaptureReadError(f"PCAPNG file is corrupt: {path}")
     except OSError as exc:
         raise CaptureReadError(f"Unable to read capture file: {path}") from exc
 
 
-def iter_capture_packets(path: str | Path) -> Iterator[Packet]:
-    """Yield Scapy packets from a PCAP or PCAPNG file one at a time."""
-    capture_path = Path(path)
+def validate_capture(path: str | Path) -> str:
+    """Validate a capture's format and framing without parsing packets.
 
+    Returns "pcap" or "pcapng". Raises CaptureReadError when the file is
+    missing, empty, truncated, corrupt or not a supported capture format.
+    Intended for upload-time checks; it reads headers only.
+    """
+    capture_path = Path(path)
     if not capture_path.exists():
         raise CaptureReadError(f"Capture file does not exist: {capture_path}")
     if not capture_path.is_file():
@@ -179,6 +183,15 @@ def iter_capture_packets(path: str | Path) -> Iterator[Packet]:
         _validate_pcap_structure(capture_path)
     else:
         _validate_pcapng_structure(capture_path)
+    return capture_format
+
+
+def iter_capture_packets(path: str | Path) -> Iterator["Packet"]:
+    """Yield Scapy packets from a PCAP or PCAPNG file one at a time."""
+    from scapy.utils import PcapNgReader, PcapReader
+
+    capture_path = Path(path)
+    capture_format = validate_capture(capture_path)
 
     reader = None
 

@@ -1,68 +1,44 @@
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import app
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
-def test_root_endpoint(client):
-    response = client.get("/")
-
-    assert response.status_code == 200
-    assert response.json() == {"message": "Welcome to NetScope"}
+from app import create_app
+from app.config import get_config
 
 
 def test_health_endpoint(client):
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    assert response.get_json() == {"status": "healthy"}
 
 
-def test_packet_filter_endpoint_with_protocol(client):
-    response = client.post("/packets/filter", json={"protocol": "TCP"})
+def test_unknown_api_path_returns_json_error(client):
+    response = client.get("/api/v1/does-not-exist")
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "message": "Filter applied successfully",
-        "filters": {"protocol": "TCP", "source_ip": None},
-        "packets": [
-            {
-                "protocol": "TCP",
-                "source_ip": "192.168.1.10",
-                "destination_ip": "192.168.1.20",
-            },
-            {
-                "protocol": "TCP",
-                "source_ip": "192.168.1.10",
-                "destination_ip": "192.168.1.30",
-            },
-        ],
-    }
+    assert response.status_code == 404
+    body = response.get_json()
+    assert body["error"]["code"] == 404
 
 
-def test_packet_filter_endpoint_with_protocol_and_source_ip(client):
-    response = client.post(
-        "/packets/filter",
-        json={"protocol": "TCP", "source_ip": "192.168.1.10"},
-    )
+def test_wrong_method_returns_json_405(client):
+    response = client.post("/api/v1/health")
 
-    assert response.status_code == 200
-    assert len(response.json()["packets"]) == 2
+    assert response.status_code == 405
+    assert response.get_json()["error"]["code"] == 405
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"protocol": 123},
-        {"source_ip": ["192.168.1.10"]},
-    ],
-)
-def test_packet_filter_endpoint_rejects_invalid_payload(client, payload):
-    response = client.post("/packets/filter", json=payload)
+def test_testing_config_applied(app):
+    assert app.config["TESTING"] is True
 
-    assert response.status_code == 422
+
+def test_production_requires_secret_key(monkeypatch):
+    monkeypatch.delenv("NETSCOPE_SECRET_KEY", raising=False)
+    config = get_config("production")
+    config.SECRET_KEY = None
+
+    with pytest.raises(RuntimeError, match="NETSCOPE_SECRET_KEY"):
+        create_app(config)
+
+
+def test_unknown_environment_rejected():
+    with pytest.raises(RuntimeError, match="Unknown NETSCOPE_ENV"):
+        get_config("staging")

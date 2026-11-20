@@ -1,5 +1,13 @@
 # NetScope
 
+> **Migration in progress (Phase 1):** the application is moving from FastAPI to
+> Flask. The Flask application factory (`app/__init__.py`), `GET /api/v1/health`
+> and the hardened capture validators are in place. Sections below that mention
+> FastAPI, Uvicorn, `/health` or `/packets/filter` describe the previous
+> prototype and will be rewritten as each phase lands. Run the app with
+> `uv run flask --app wsgi run` and the tests with `uv run pytest`.
+
+
 NetScope is a multi-user network traffic analysis and intelligence platform.
 Its intended purpose is to let users upload network captures, inspect packets
 and flows, understand protocol behavior, and use traffic statistics and reports
