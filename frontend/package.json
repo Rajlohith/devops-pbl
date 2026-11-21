@@ -1,13 +1,30 @@
 {
   "name": "netscope-frontend",
+  "version": "0.1.0",
   "private": true,
-  "description": "Build tooling for NetScope's static assets. Only needed when templates or JS change.",
+  "description": "NetScope frontend: Vue 3 + Vite application, plus build tooling for the legacy Flask-served static assets.",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "build:css": "tailwindcss -c tailwind.config.js -i static/src/input.css -o static/css/app.css --minify",
     "vendor:chartjs": "cp node_modules/chart.js/dist/chart.umd.js static/vendor/chart.umd.js"
   },
-  "devDependencies": {
+  "dependencies": {
+    "axios": "^1.7.9",
     "chart.js": "4.4.7",
-    "tailwindcss": "3.4.17"
+    "pinia": "^3.0.1",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "3.4.17",
+    "vite": "^7.0.0"
   }
 }

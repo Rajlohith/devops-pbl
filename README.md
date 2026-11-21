@@ -64,6 +64,26 @@ JS classes:
 npm --prefix frontend ci && npm --prefix frontend run build:css   # Tailwind 3.4.17 -> frontend/static/css/app.css
 ```
 
+### Vue frontend (in development)
+
+A Vue 3 + Vite application is being built in `frontend/src` to replace the server-rendered pages
+one by one. For now it contains only the application shell and a placeholder dashboard; the
+existing Flask pages above remain the working interface. Requires Node `^20.19` or `>=22.12`.
+
+```bash
+npm --prefix frontend install       # first time only; commit the generated package-lock.json
+uv run flask --app backend/wsgi run # terminal 1: Flask on :5000
+npm --prefix frontend run dev       # terminal 2: Vite on http://localhost:5173
+npm --prefix frontend run build     # production build -> frontend/dist (Flask does not serve it yet)
+npm --prefix frontend run preview   # serve the production build locally on :4173
+```
+
+The browser only talks to Vite; it forwards `/api` to Flask (`VITE_DEV_PROXY_TARGET`, default
+`http://127.0.0.1:5000`), so requests are same-origin and Flask needs no CORS. Session cookies and
+CSRF protection work as they do for the existing pages: the API client sends `X-CSRFToken` on
+state-changing requests. To see signed-in state in the dev app, sign in at
+`http://localhost:5000/login` first (cookies are shared across ports on `localhost`).
+
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
@@ -112,6 +132,8 @@ frontend/
   templates/         login/register and the page shells (dashboard, captures, capture, compare)
   static/js/         ns.js (shared client library) + one script per page
   static/css, vendor compiled Tailwind CSS, vendored Chart.js
+  index.html, vite.config.js, package.json   Vue 3 + Vite application (see above)
+  src/               api/ (Axios client), router/, stores/ (Pinia), layouts/, views/, components/, composables/
 tests/e2e/           real-browser end-to-end tests (Playwright)
 ```
 
