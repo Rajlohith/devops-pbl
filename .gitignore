@@ -9,3 +9,4 @@ netscope/instance/
 *.pcapng
 !netscope/tests/fixtures/*.pcap
 !netscope/tests/fixtures/*.pcapng
+node_modules/

@@ -34,6 +34,7 @@ def create_app(config: str | type[Config] | None = None) -> Flask:
     from app.extensions import csrf, db, login_manager, migrate
 
     db.init_app(app)
+    _enable_sqlite_foreign_keys()
     migrate.init_app(app, db)
     csrf.init_app(app)
     login_manager.init_app(app)
@@ -54,3 +55,16 @@ def create_app(config: str | type[Config] | None = None) -> Flask:
         return response
 
     return app
+
+
+def _enable_sqlite_foreign_keys() -> None:
+    """SQLite ignores foreign keys unless asked; PostgreSQL always enforces them."""
+    import sqlite3
+
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    @event.listens_for(Engine, "connect")
+    def _fk_pragma(dbapi_connection, _record):
+        if isinstance(dbapi_connection, sqlite3.Connection):
+            dbapi_connection.execute("PRAGMA foreign_keys=ON")

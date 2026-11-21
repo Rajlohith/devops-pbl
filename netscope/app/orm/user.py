@@ -32,11 +32,11 @@ class User(UserMixin, db.Model):
         return {
             "id": str(self.id),
             "email": self.email,
-            "created_at": _iso(self.created_at),
+            "created_at": iso_utc(self.created_at),
         }
 
 
-def _iso(value: datetime | None) -> str | None:
+def iso_utc(value: datetime | None) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:  # SQLite drops tzinfo; values are always stored as UTC

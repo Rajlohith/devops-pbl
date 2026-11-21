@@ -36,4 +36,6 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    # Optional: enables the real-browser tests in tests/e2e (skipped when absent).
+    "playwright>=1.45",
 ]

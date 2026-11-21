@@ -1,39 +1,8 @@
 {% extends "base.html" %}
-{% from "_status_badge.html" import badge %}
 {% block title %}Captures · NetScope{% endblock %}
 {% block content %}
-<h1 class="mb-4 text-2xl font-semibold">Your captures</h1>
-
-<form method="post" action="{{ url_for('web.upload') }}" enctype="multipart/form-data"
-      class="mb-8 flex flex-wrap items-center gap-4 rounded bg-white p-4 shadow">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <input type="file" name="file" accept=".pcap,.pcapng,.cap" required class="text-sm">
-  <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="analyze" checked> Start analysis</label>
-  <button class="rounded bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">Upload</button>
-</form>
-
-{% if result.items %}
-<table class="w-full overflow-hidden rounded bg-white text-left text-sm shadow">
-  <thead class="bg-slate-100 text-slate-600">
-    <tr><th class="px-4 py-2">File</th><th class="px-4 py-2">Format</th><th class="px-4 py-2">Size</th><th class="px-4 py-2">Uploaded</th><th class="px-4 py-2">Status</th></tr>
-  </thead>
-  <tbody>
-  {% for c in result.items %}
-    <tr class="border-t">
-      <td class="px-4 py-2"><a class="underline" href="{{ url_for('web.capture_detail', capture_id=c.id) }}">{{ c.original_filename }}</a></td>
-      <td class="px-4 py-2">{{ c.file_format.value }}</td>
-      <td class="px-4 py-2">{{ '{:,}'.format(c.file_size_bytes) }} B</td>
-      <td class="px-4 py-2">{{ c.uploaded_at.strftime('%Y-%m-%d %H:%M') }} UTC</td>
-      <td class="px-4 py-2">{{ badge(c.status) }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-<div class="mt-4 flex gap-4 text-sm">
-  {% if result.has_prev %}<a class="underline" href="{{ url_for('web.captures', page=result.prev_num) }}">Previous</a>{% endif %}
-  {% if result.has_next %}<a class="underline" href="{{ url_for('web.captures', page=result.next_num) }}">Next</a>{% endif %}
-</div>
-{% else %}
-<p class="rounded bg-white p-6 text-center text-slate-500 shadow">No captures yet. Upload a .pcap or .pcapng file to get started.</p>
-{% endif %}
+<h1 class="mb-6 text-2xl font-semibold">Captures</h1>
+<section id="upload-root" class="mb-8"></section>
+<section id="history-root"></section>
 {% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/captures.js') }}"></script>{% endblock %}

@@ -69,7 +69,7 @@ def test_task_enforces_packet_limit(auth_client, pcap_bytes, app):
 def test_task_unexpected_error_is_recorded_not_raised(auth_client, pcap_bytes, monkeypatch):
     record = _record(auth_client, pcap_bytes)
     _set_status(record, CaptureStatus.PENDING)
-    monkeypatch.setattr("app.workers.tasks._count_packets", lambda path: 1 / 0)
+    monkeypatch.setattr("app.workers.tasks._run_analysis", lambda cid, path: 1 / 0)
 
     analyze_capture(str(record.id))
 

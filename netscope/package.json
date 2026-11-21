@@ -1,0 +1,13 @@
+{
+  "name": "netscope-frontend",
+  "private": true,
+  "description": "Build tooling for NetScope's static assets. Only needed when templates or JS change.",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.js -i app/static/src/input.css -o app/static/css/app.css --minify",
+    "vendor:chartjs": "cp node_modules/chart.js/dist/chart.umd.js app/static/vendor/chart.umd.js"
+  },
+  "devDependencies": {
+    "chart.js": "4.4.7",
+    "tailwindcss": "3.4.17"
+  }
+}
