@@ -16,7 +16,7 @@ def test_migrations_match_models(tmp_path):
 
     app = create_app(Cfg)
     with app.app_context():
-        upgrade(directory="migrations")
+        upgrade()  # uses the directory configured on Migrate
         with db.engine.connect() as connection:
             context = MigrationContext.configure(connection)
             assert compare_metadata(context, db.metadata) == []

@@ -27,7 +27,7 @@ package = true
 
 [tool.uv.build-backend]
 module-name = "app"
-module-root = "."
+module-root = "backend"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
@@ -39,3 +39,9 @@ dev = [
     # Optional: enables the real-browser tests in tests/e2e (skipped when absent).
     "playwright>=1.45",
 ]
+
+[tool.pytest.ini_options]
+# backend/tests: unit and API tests. tests/e2e: real-browser tests (skipped without Chromium).
+testpaths = ["backend/tests", "tests"]
+# Makes `app` and the shared `tests.*` helpers importable without relying on the editable install.
+pythonpath = ["backend"]

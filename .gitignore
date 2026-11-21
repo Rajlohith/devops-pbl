@@ -1,12 +1,31 @@
+# Editors
 .vscode/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
-.env
 .pytest_cache/
-netscope/instance/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Local configuration and data (never commit)
+.env
+.env.*
+!.env.example
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Capture files (test fixtures are the only exception)
 *.pcap
 *.pcapng
-!netscope/tests/fixtures/*.pcap
-!netscope/tests/fixtures/*.pcapng
+!backend/tests/fixtures/*.pcap
+!backend/tests/fixtures/*.pcapng
+
+# Node
 node_modules/
