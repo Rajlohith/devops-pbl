@@ -1,0 +1,9 @@
+{% macro field(name, label, type, value='', errors={}, autocomplete='') %}
+<div>
+  <label for="{{ name }}" class="block text-sm font-medium">{{ label }}</label>
+  <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value }}" required
+         {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+         class="mt-1 w-full rounded border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none">
+  {% if errors.get(name) %}<p class="mt-1 text-sm text-red-700">{{ errors[name] }}</p>{% endif %}
+</div>
+{% endmacro %}

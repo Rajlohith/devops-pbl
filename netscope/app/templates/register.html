@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_auth_field.html" import field %}
+{% block title %}Register · NetScope{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-sm rounded bg-white p-6 shadow">
+  <h1 class="mb-4 text-xl font-semibold">Create an account</h1>
+  <form method="post" class="space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ field('email', 'Email', 'email', email, errors, 'email') }}
+    {{ field('password', 'Password (min 8 characters)', 'password', '', errors, 'new-password') }}
+    <button class="w-full rounded bg-slate-900 py-2 text-white hover:bg-slate-700">Register</button>
+  </form>
+  <p class="mt-4 text-sm">Already registered? <a class="underline" href="{{ url_for('web.login') }}">Log in</a></p>
+</div>
+{% endblock %}

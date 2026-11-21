@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_status_badge.html" import badge %}
+{% block title %}{{ capture.original_filename }} · NetScope{% endblock %}
+{% block content %}
+<a href="{{ url_for('web.captures') }}" class="text-sm underline">&larr; All captures</a>
+<h1 class="mb-4 mt-2 text-2xl font-semibold">{{ capture.original_filename }} {{ badge(capture.status) }}</h1>
+
+{% if capture.error_message %}
+<div class="mb-4 rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{{ capture.error_message }}</div>
+{% endif %}
+
+<dl class="grid grid-cols-2 gap-4 rounded bg-white p-4 text-sm shadow sm:grid-cols-3">
+  <div><dt class="text-slate-500">Capture ID</dt><dd class="break-all font-mono text-xs">{{ capture.id }}</dd></div>
+  <div><dt class="text-slate-500">Format</dt><dd>{{ capture.file_format.value }}</dd></div>
+  <div><dt class="text-slate-500">Size</dt><dd>{{ '{:,}'.format(capture.file_size_bytes) }} bytes</dd></div>
+  <div><dt class="text-slate-500">Uploaded</dt><dd>{{ capture.uploaded_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</dd></div>
+  <div><dt class="text-slate-500">Packets</dt><dd>{{ '{:,}'.format(capture.packet_count) if capture.packet_count is not none else '—' }}</dd></div>
+  <div><dt class="text-slate-500">SHA-256</dt><dd class="break-all font-mono text-xs">{{ capture.sha256 }}</dd></div>
+</dl>
+
+<div class="mt-6 flex gap-3">
+  {% if capture.status.value in ('uploaded', 'failed') %}
+  <form method="post" action="{{ url_for('web.analyze', capture_id=capture.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="rounded bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">{{ 'Retry analysis' if capture.status.value == 'failed' else 'Start analysis' }}</button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ url_for('web.delete', capture_id=capture.id) }}"
+        onsubmit="return confirm('Delete this capture and its file permanently?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="rounded bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600">Delete</button>
+  </form>
+</div>
+{% endblock %}

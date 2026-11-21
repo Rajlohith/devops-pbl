@@ -1,453 +1,116 @@
 # NetScope
 
-> **Migration in progress (Phase 1):** the application is moving from FastAPI to
-> Flask. The Flask application factory (`app/__init__.py`), `GET /api/v1/health`
-> and the hardened capture validators are in place. Sections below that mention
-> FastAPI, Uvicorn, `/health` or `/packets/filter` describe the previous
-> prototype and will be rewritten as each phase lands. Run the app with
-> `uv run flask --app wsgi run` and the tests with `uv run pytest`.
+NetScope is a multi-user network traffic analysis platform. Users register, upload
+PCAP/PCAPNG captures, and a background worker analyses them. The backend is Flask +
+SQLAlchemy (PostgreSQL) with Celery/Redis for background jobs and Scapy for packet
+parsing.
 
+## Status
 
-NetScope is a multi-user network traffic analysis and intelligence platform.
-Its intended purpose is to let users upload network captures, inspect packets
-and flows, understand protocol behavior, and use traffic statistics and reports
-to investigate network activity.
+**Phase 1 (core application and backend) is implemented.** Packet extraction, flows,
+protocol and performance analytics, the dashboard and reports arrive in Phases 2 and 3.
 
-The project is being developed incrementally. The current repository contains
-the initial FastAPI backend, domain models, a packet-filtering prototype, and a
-validated streaming reader for PCAP and PCAPNG files. It is not yet a
-production-ready platform.
+| Area | State |
+| --- | --- |
+| Flask app factory, env-based config, JSON error envelope | Done |
+| PostgreSQL / SQLAlchemy models and Alembic migrations (`users`, `captures`) | Done |
+| Registration, login, logout, protected routes, per-user data | Done |
+| PCAP/PCAPNG upload with content validation and secure storage | Done |
+| Capture list, detail, status and delete (owner-scoped) | Done |
+| Celery + Redis job submission and status tracking | Done |
+| Worker analysis | **Minimal**: streams the file through the reader and records the packet count. Extraction and analytics are Phase 2 |
+| Server-rendered auth and capture pages (Tailwind) | Basic; dashboard, charts and reports are Phase 3 |
 
-## Current Development Status
+## Quick start
 
-### Implemented
+Requires Python >= 3.12, [uv](https://docs.astral.sh/uv/), PostgreSQL and Redis.
 
-- A Python package containing a FastAPI application.
-- `GET /` and `GET /health` endpoints.
-- `POST /packets/filter`, backed by an in-memory packet-filtering service.
-- Pydantic models for captures, packets, and transport protocols.
-- Scapy-based streaming iteration over PCAP and PCAPNG files.
-- Signature-based capture format detection and structural validation.
-- Unit and API tests covering the current implementation.
+```bash
+cd netscope
+uv sync
+export NETSCOPE_DATABASE_URL=postgresql+psycopg://netscope:netscope@localhost:5432/netscope
+export NETSCOPE_REDIS_URL=redis://localhost:6379/0
+uv run flask --app wsgi db upgrade                    # create tables
+uv run flask --app wsgi run                           # web app on :5000
+uv run celery -A wsgi:celery_app worker --loglevel=info   # in a second terminal
+uv run pytest                                         # tests (SQLite, no services needed)
+```
 
-### Work currently in progress
+### Configuration (environment variables)
 
-The repository is at the foundation stage of the analysis engine. The capture
-reader is available, but the next analysis-engine step is to convert the
-Scapy packets it yields into the NetScope `Packet` domain model and then add
-protocol extraction and analytics.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NETSCOPE_ENV` | `development` | `development`, `testing` or `production` |
+| `NETSCOPE_SECRET_KEY` | dev key in development only | Required in production |
+| `NETSCOPE_DATABASE_URL` | local PostgreSQL | SQLAlchemy URL |
+| `NETSCOPE_REDIS_URL` | `redis://localhost:6379/0` | Celery broker and backend |
+| `NETSCOPE_UPLOAD_FOLDER` | `instance/uploads` | Where capture files are stored |
+| `NETSCOPE_MAX_UPLOAD_BYTES` | 200 MB | Upload size limit |
+| `NETSCOPE_MAX_PACKETS` | 2,000,000 | Per-capture packet limit for analysis |
 
-### Planned
-
-The broader platform still needs persistence, authentication, upload and job
-management, packet analysis, flow reconstruction, reporting, a frontend, and
-deployment infrastructure. Those areas are not implemented in this repository
-state.
-
-## Current Implementation
-
-### Backend
-
-- **Python:** `>=3.12.16`
-- **Web framework:** FastAPI
-- **Application server:** Uvicorn
-- **Project and dependency management:** uv
-- **Health endpoint:** `GET /health`
-- **Packet filtering:** `POST /packets/filter`, using
-  [`app/services/packet_service.py`](app/services/packet_service.py) and a
-  small in-memory sample packet list defined by the route
-
-The packet-filtering prototype currently supports filtering by `protocol` and
-`source_ip`. It is not connected to capture files or persistent storage.
-
-### Domain Models
-
-The domain models are Pydantic 2 models independent of FastAPI route handlers:
-
-- `Capture`
-- `CaptureFormat`
-- `CaptureStatus`
-- `Packet`
-- `TransportProtocol`
-
-They provide structured validation and Pydantic serialization for capture and
-packet data. Protocol-layer fields on `Packet` are nullable so unavailable
-information can remain unavailable rather than being represented by fabricated
-zero values.
-
-### Capture Ingestion
-
-[`app/services/capture_reader.py`](app/services/capture_reader.py) provides
-`iter_capture_packets(path)`, which:
-
-- Reads PCAP and PCAPNG files through Scapy.
-- Yields packets one at a time instead of loading the complete capture into
-  memory.
-- Detects the format from file signatures rather than filename extensions.
-- Supports PCAP byte-order and microsecond/nanosecond timestamp variants.
-- Handles PCAPNG files containing multiple sections with different byte orders.
-- Performs a structural validation pass before Scapy iteration.
-- Detects empty, truncated, corrupt, unsupported, and malformed captures.
-- Closes the Scapy reader when iteration completes or fails.
-- Raises `CaptureReadError` for capture-specific read failures.
-
-The capture reader is not a packet extraction pipeline. It currently yields
-Scapy packet objects; it does not populate the NetScope `Packet` Pydantic model,
-extract Ethernet/IP/TCP/UDP fields, decode application protocols, or calculate
-capture-level statistics.
+Production sets `SESSION_COOKIE_SECURE`, so serve it over HTTPS.
 
 ## Architecture
 
-The current architecture is intentionally small:
-
-- **API layer:** `app/main.py` creates the FastAPI application and includes the
-  health and packet routes. Route handlers receive HTTP requests and return
-  responses.
-- **Schema layer:** `app/schemas/packet.py` defines `PacketFilter`, the request
-  model for packet filtering.
-- **Service layer:** `app/services/packet_service.py` applies the current
-  in-memory packet filters. `app/services/capture_reader.py` handles validated,
-  streaming capture iteration.
-- **Domain models:** `app/models/` contains Pydantic representations of
-  captures and extracted packet data. These models are not database models.
-- **Capture reader:** the reader is independent of FastAPI and is not wired to
-  an upload route or the packet-filtering service.
-
-```mermaid
-flowchart LR
-    Client[HTTP client]
-    API[FastAPI API layer]
-    Routes[Health and packet routes]
-    Schema[PacketFilter schema]
-    Filter[Packet filtering service]
-    Models[Pydantic domain models]
-    File[PCAP or PCAPNG file]
-    Reader[Streaming capture reader]
-    Scapy[Scapy packet objects]
-
-    Client --> API
-    API --> Routes
-    Routes --> Schema
-    Routes --> Filter
-    Filter --> Routes
-    File --> Reader
-    Reader --> Scapy
-    Models -. independent domain representation .-> Routes
+```
+app/
+  __init__.py        application factory
+  config.py          environment-based configuration
+  extensions.py      db, migrate, login_manager, csrf
+  celery_app.py      Celery bound to the Flask app context
+  models/            Pydantic domain models (Capture, Packet), reused as API shapes
+  orm/               SQLAlchemy tables: User, CaptureRecord
+  services/
+    capture_reader.py   validation + streaming Scapy reader
+    capture_storage.py  secure file storage
+    capture_service.py  upload, ownership-scoped queries, job submission, delete
+    auth_service.py     registration and authentication
+  api/               JSON API under /api/v1 (health, auth, captures)
+  web/, templates/   server-rendered pages calling the same services
+  workers/tasks.py   Celery tasks
+migrations/          Alembic migrations
 ```
 
-There is currently no persistence layer, authentication layer, background
-worker, upload endpoint, analysis pipeline, or frontend in the repository.
+Uploaded files are stored on disk at `<UPLOAD_FOLDER>/<user_id>/<capture_id>.<format>`,
+never in the database; the database holds metadata and the relative path. The client's
+filename is used only for display.
 
-## Project Structure
+### Security notes
 
-The relevant implemented structure is:
+- Passwords are hashed with Werkzeug (scrypt); login responses do not reveal whether an email exists.
+- Sessions use HttpOnly, SameSite=Lax cookies. All state-changing requests need a CSRF token:
+  forms include it; JSON clients fetch it from `GET /api/v1/auth/csrf` and send `X-CSRFToken`.
+- Every capture query is filtered by owner. Another user's capture returns 404.
+- Uploads are validated by content (not extension), streamed to disk with a size limit,
+  and error messages never include server paths.
+- Not yet implemented: login rate limiting, email verification, password reset.
 
-```text
-netscope/
-├── app/
-│   ├── main.py
-│   ├── api/
-│   │   └── routes/
-│   │       ├── health.py
-│   │       └── packets.py
-│   ├── core/
-│   │   └── __init__.py
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── capture.py
-│   │   └── packet.py
-│   ├── schemas/
-│   │   ├── __init__.py
-│   │   └── packet.py
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── capture_reader.py
-│   │   └── packet_service.py
-│   └── workers/
-│       └── __init__.py
-├── tests/
-│   ├── test_api.py
-│   ├── test_capture_reader.py
-│   ├── test_models.py
-│   └── test_packet_service.py
-├── pyproject.toml
-├── uv.lock
-├── LICENSE
-└── README.md
-```
+### Job lifecycle
 
-The `core` and `workers` packages currently contain only package
-initialization files; they do not provide database or background-processing
-functionality yet.
+`uploaded` -> `pending` (queued) -> `processing` -> `completed` | `failed`.
+A capture that fails (including when the broker is down) keeps a user-visible
+`error_message` and can be retried. The worker only processes `pending` captures, so
+duplicate deliveries are harmless.
 
-## Technology Stack
+## API (`/api/v1`)
 
-### Currently implemented
-
-| Area | Technology |
+| Method and path | Description |
 | --- | --- |
-| Language | Python `>=3.12.16` |
-| API | FastAPI |
-| ASGI server | Uvicorn |
-| Validation and domain representation | Pydantic 2 |
-| Capture reading | Scapy |
-| Project and dependency management | uv |
-| Testing | Pytest |
-| API test client support | `httpx2` for the installed Starlette version |
+| `GET /health` | Liveness |
+| `GET /auth/csrf` | CSRF token for JSON clients |
+| `POST /auth/register`, `POST /auth/login` | JSON `{email, password}`; starts a session |
+| `POST /auth/logout`, `GET /auth/me` | End session; current user |
+| `POST /captures` | Multipart `file` (+ optional `analyze=false`); returns 201 |
+| `GET /captures` | `page`, `per_page` (max 100), `status` filter |
+| `GET /captures/<id>`, `GET /captures/<id>/status` | Details; processing status |
+| `POST /captures/<id>/analyze` | Queue analysis (202); 409 if not `uploaded`/`failed`; 503 if the broker is down |
+| `DELETE /captures/<id>` | Delete record and file (204) |
 
-### Planned or assigned to future components
+Errors use `{"error": {"code", "name", "message"}}`.
 
-The following technologies are not currently used by the implemented backend:
+## Capture reader
 
-- PostgreSQL and SQLAlchemy for persistence.
-- Celery and Redis for background processing.
-- Docker, Kubernetes, Kubernetes autoscaling, Locust, and Ansible for
-  deployment, scaling, testing, and automation.
-- HTML, CSS, JavaScript, Tailwind CSS, Chart.js, or another frontend stack for
-  the user interface.
-
-Database integration, authentication, frontend work, reports, and deployment
-are separate project components being handled by other team members.
-
-## Setup and Installation
-
-### Prerequisites
-
-- Python 3.12.16 or newer.
-- [uv](https://docs.astral.sh/uv/) installed and available on `PATH`.
-
-### Clone the repository
-
-```bash
-git clone https://github.com/Rajlohith/devops-pbl.git
-cd devops-pbl/netscope
-```
-
-### Install dependencies
-
-From the `netscope` project directory:
-
-```bash
-uv sync
-```
-
-The project is configured as a uv-managed package. The default development
-dependency group installs the test dependencies as well as the runtime
-dependencies.
-
-### Run the development server
-
-```bash
-uv run uvicorn app.main:app --reload
-```
-
-The API is then available at `http://127.0.0.1:8000`. FastAPI's generated
-OpenAPI documentation is available at `/docs`, although the implemented API
-surface is limited to the endpoints described below.
-
-### Run the tests
-
-```bash
-uv run pytest
-```
-
-## API Documentation
-
-The current API has three endpoints.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/` | Returns the NetScope welcome message. |
-| `GET` | `/health` | Returns the application health status. |
-| `POST` | `/packets/filter` | Filters the route's in-memory sample packets. |
-
-### `GET /`
-
-Response status: `200 OK`
-
-```json
-{
-  "message": "Welcome to NetScope"
-}
-```
-
-### `GET /health`
-
-Response status: `200 OK`
-
-```json
-{
-  "status": "healthy"
-}
-```
-
-### `POST /packets/filter`
-
-The request body is a `PacketFilter` object. Both fields are optional strings:
-
-```json
-{
-  "protocol": "TCP",
-  "source_ip": "192.168.1.10"
-}
-```
-
-The response contains the normalized filter values and the matching entries
-from the route's in-memory sample list:
-
-```json
-{
-  "message": "Filter applied successfully",
-  "filters": {
-    "protocol": "TCP",
-    "source_ip": "192.168.1.10"
-  },
-  "packets": [
-    {
-      "protocol": "TCP",
-      "source_ip": "192.168.1.10",
-      "destination_ip": "192.168.1.20"
-    },
-    {
-      "protocol": "TCP",
-      "source_ip": "192.168.1.10",
-      "destination_ip": "192.168.1.30"
-    }
-  ]
-}
-```
-
-An empty JSON object is valid and returns all four sample packets. Payloads
-with values of the wrong type are rejected by FastAPI/Pydantic with
-`422 Unprocessable Entity`.
-
-## Data Models
-
-### Capture
-
-`Capture` represents metadata for an uploaded capture file. Its fields include:
-
-- `id`: generated UUID.
-- `owner_user_id`: optional UUID reference reserved for future ownership
-  integration.
-- `original_filename`: required, trimmed, non-empty string.
-- `file_format`: `pcap` or `pcapng`.
-- `file_size_bytes`: positive integer.
-- `status`: one of `uploaded`, `pending`, `processing`, `completed`, or
-  `failed`.
-- `uploaded_at`: generated timezone-aware timestamp.
-- `processing_started_at` and `processing_completed_at`: optional timestamps.
-- `error_message`: optional failure information.
-
-The model does not persist files, enforce status transitions, or connect to a
-user model.
-
-### Packet
-
-`Packet` represents an extracted packet record and requires:
-
-- `capture_id`, `packet_number`, `timestamp`, `captured_length`, and
-  `original_length`.
-- Optional Ethernet fields: `source_mac`, `destination_mac`, `ether_type`, and
-  `vlan_id`.
-- Optional network fields: source/destination IP addresses, IP version,
-  TTL/hop limit, and transport protocol.
-- Optional transport fields: ports, TCP flags and sequence/acknowledgement
-  numbers, and UDP length.
-- Optional application protocol and flexible `application_metadata`.
-
-Important validation rules include positive packet numbers, non-negative
-lengths, `captured_length <= original_length`, valid IPv4/IPv6 values,
-matching supplied IP versions, timezone-aware timestamps, six-octet MAC
-addresses, valid port and field ranges, and VLAN IDs from `0` through `4094`.
-Unavailable protocol-layer data remains `null`.
-
-`application_metadata` is intended for decoded protocol metadata, such as DNS
-or HTTP information. It is not an unrestricted raw-payload store.
-
-### TransportProtocol
-
-`TransportProtocol` can represent a protocol by its IP protocol `number`, a
-readable `name`, or both. At least one must be provided. Known number/name
-pairs must agree, while unknown numbers and names remain supported for future
-protocols.
-
-Representative serialized packet data:
-
-```json
-{
-  "capture_id": "4f0e2e8d-4c8f-4de5-8e1d-8f4e3b2bb5f7",
-  "packet_number": 1,
-  "timestamp": "2026-01-01T12:00:00Z",
-  "captured_length": 100,
-  "original_length": 100,
-  "source_mac": "00:11:22:33:44:55",
-  "destination_mac": "66:77:88:99:aa:bb",
-  "ether_type": 2048,
-  "vlan_id": null,
-  "source_ip": "192.168.1.10",
-  "destination_ip": "192.168.1.20",
-  "ip_version": 4,
-  "ttl_or_hop_limit": 64,
-  "transport_protocol": {
-    "number": 6,
-    "name": "TCP"
-  },
-  "source_port": 1234,
-  "destination_port": 443,
-  "tcp_flags": "SYN",
-  "tcp_sequence_number": 10,
-  "tcp_acknowledgement_number": 0,
-  "udp_length": null,
-  "application_protocol": "HTTP",
-  "application_metadata": {
-    "method": "GET"
-  }
-}
-```
-
-## Testing
-
-The test suite is run with Pytest and currently covers:
-
-- Root, health, packet-filtering, valid-request, and invalid-payload API
-  behavior.
-- Packet filtering by protocol, source IP, both fields, empty filters, and
-  non-matching filters.
-- Capture and packet construction, enum validation, field validation,
-  optional protocol layers, serialization, timestamp and IP-version rules,
-  MAC addresses, and packet-length constraints.
-- PCAP and PCAPNG reading, empty captures, multiple packets, byte-order and
-  timestamp-precision variants, mixed-endian PCAPNG sections, malformed
-  structures, truncation, unsupported files, and resource-safe reading.
-
-Run the complete suite with:
-
-```bash
-uv run pytest
-```
-
-## Current Limitations and Next Steps
-
-The analysis-engine scope does not yet include:
-
-- Ethernet and IP field extraction into NetScope `Packet` models.
-- TCP and UDP field extraction.
-- Application protocol metadata extraction.
-- A capture-to-model conversion pipeline.
-- Flow reconstruction.
-- Protocol analytics.
-- Traffic performance analytics.
-
-The following broader platform components are also outside the current
-implementation and are being handled separately by other team members:
-
-- Database integration and persistent capture ownership.
-- Authentication and authorization.
-- Frontend functionality.
-- Reports.
-- Deployment and infrastructure automation.
-
-The next analysis-engine milestone should build on the streaming capture reader
-by extracting available protocol fields into the existing domain models while
-preserving nullability for layers that are not present.
+`app/services/capture_reader.py` detects PCAP/PCAPNG by signature, validates structure
+without loading packet bodies (truncation, bad lengths, corrupt blocks), and streams Scapy
+packets one at a time through `iter_capture_packets`. Converting those into the `Packet`
+model is Phase 2.

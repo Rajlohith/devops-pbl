@@ -44,6 +44,14 @@ class Config:
         "NETSCOPE_REDIS_URL", "redis://localhost:6379/0"
     )
 
+    ALLOWED_CAPTURE_EXTENSIONS = (".pcap", ".pcapng", ".cap")
+
+    # Celery runs in a worker process; set CELERY_ALWAYS_EAGER to run inline.
+    CELERY_ALWAYS_EAGER = False
+
+    # CSRF tokens are tied to the session, so they do not expire on their own.
+    WTF_CSRF_TIME_LIMIT = None
+
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = True
@@ -60,6 +68,9 @@ class TestingConfig(Config):
     ENV_NAME = "testing"
     TESTING = True
     SECRET_KEY = "testing-key"
+    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    CELERY_ALWAYS_EAGER = True
+    WTF_CSRF_ENABLED = False
     SESSION_COOKIE_SECURE = False
     UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "netscope-test-uploads")
 
