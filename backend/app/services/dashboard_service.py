@@ -10,7 +10,7 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models.capture import CaptureStatus
-from app.orm import AnalysisResult, CaptureRecord, PacketRecord, User
+from app.orm import AdvancedAnalysis, AnalysisResult, CaptureRecord, PacketRecord, User
 from app.orm.user import iso_utc
 
 RECENT_SESSIONS = 8
@@ -90,11 +90,70 @@ def build_dashboard(user: User) -> dict:
         "recent_sessions": [_session_row(c, r) for c, r in recent],
         # Oldest first, so charts read left to right in time.
         "recent_traffic": [_session_row(c, r) for c, r in reversed(traffic_rows)],
+        "network_intelligence": _network_intelligence(owned),
         "protocols": {
             "transport": _merge_protocols(s["protocols"]["transport"] for s in summaries),
             "application": _merge_protocols(s["protocols"]["application"] for s in summaries),
             "captures_included": len(summaries),
         },
+    }
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _network_intelligence(owned) -> dict:
+    """Pooled Phase 4 figures over the user's most recent analysed captures.
+
+    Rates are pooled from counts (sum of numerators over sum of denominators), never averaged
+    across captures, and are null when the pooled denominator is zero.
+    """
+    documents = db.session.execute(
+        db.select(AdvancedAnalysis.document)
+        .join(CaptureRecord, CaptureRecord.id == AdvancedAnalysis.capture_id)
+        .where(owned)
+        .order_by(CaptureRecord.uploaded_at.desc())
+        .limit(PROTOCOL_CAPTURE_LIMIT)
+    ).scalars().all()
+
+    attempts = established = refused = incomplete = 0
+    responses = errors = server_failures = unanswered = queries = 0
+    rst = tcp_packets = retx = 0
+    severity = {"info": 0, "low": 0, "medium": 0, "high": 0}
+    for doc in documents:
+        tcp = doc["tcp"]
+        attempts += tcp["observable_attempts"]
+        established += tcp["states"]["established"]
+        refused += tcp["states"]["refused"]
+        incomplete += tcp["states"]["incomplete"]
+        dns = doc["dns"]
+        responses += dns["responses_observed"]
+        errors += dns["error_responses"]
+        server_failures += dns["server_failures"]
+        queries += dns["queries"]
+        unanswered += dns["unanswered"]["inferred_timeout"] + dns["unanswered"]["indeterminate"]
+        rst += doc["resets"]["rst_packets"]
+        tcp_packets += doc["resets"]["tcp_packets"]
+        retx += doc["diagnostics"]["retransmission_packets"]
+        for name, count in doc["anomalies"]["by_severity"].items():
+            severity[name] += count
+    return {
+        "captures_included": len(documents),
+        "tcp": {
+            "observable_attempts": attempts, "established": established,
+            "incomplete": incomplete, "refused": refused,
+            "success_rate": _rate(established, attempts),
+        },
+        "dns": {
+            "queries": queries, "unanswered": unanswered, "responses": responses,
+            "error_rate": _rate(errors, responses),
+            "server_failure_rate": _rate(server_failures, responses),
+        },
+        "resets": {"rst_packets": rst, "tcp_packets": tcp_packets,
+                   "packet_rate": _rate(rst, tcp_packets)},
+        "retransmission_packets": retx,
+        "anomalies": {"total": sum(severity.values()), "by_severity": severity},
     }
 
 

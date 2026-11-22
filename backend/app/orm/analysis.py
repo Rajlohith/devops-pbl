@@ -50,6 +50,8 @@ class PacketRecord(db.Model):
     tcp_flags: Mapped[str | None] = mapped_column(db.String(12))
     tcp_sequence_number: Mapped[int | None] = mapped_column(db.BigInteger)
     tcp_acknowledgement_number: Mapped[int | None] = mapped_column(db.BigInteger)
+    tcp_window: Mapped[int | None] = mapped_column(db.Integer)
+    tcp_window_scale: Mapped[int | None] = mapped_column(db.SmallInteger)
     udp_length: Mapped[int | None] = mapped_column(db.Integer)
     payload_length: Mapped[int | None] = mapped_column(db.Integer)
 
@@ -80,6 +82,8 @@ class PacketRecord(db.Model):
             "tcp_flags": self.tcp_flags,
             "tcp_sequence_number": self.tcp_sequence_number,
             "tcp_acknowledgement_number": self.tcp_acknowledgement_number,
+            "tcp_window": self.tcp_window,
+            "tcp_window_scale": self.tcp_window_scale,
             "udp_length": self.udp_length,
             "payload_length": self.payload_length,
             "flow_id": self.flow_id,

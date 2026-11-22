@@ -311,3 +311,8 @@ expiry, and fail on any JavaScript console error. Screenshots are written to
 without loading packet bodies (truncation, bad lengths, corrupt blocks), and streams Scapy
 packets one at a time through `iter_capture_packets`; `packet_extractor.py` converts each
 into the `Packet` model.
+
+
+## Phase 4 — Advanced network intelligence
+
+TCP connection analytics, DNS analytics, traffic intelligence, loss indicators, window analysis and rule-based anomaly detection are documented in [docs/phase4-network-intelligence.md](docs/phase4-network-intelligence.md).

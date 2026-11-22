@@ -44,6 +44,11 @@ class ExtractedPacket:
     label: str  # highest identified layer, e.g. DNS, TCP, ARP, Other
     payload_length: int | None  # TCP payload bytes, used for retransmission detection
     malformed_reason: str | None
+    # Phase 4 additions. Defaults keep every existing construction site valid, and the
+    # Packet model / application_metadata are unchanged so existing consumers see no difference.
+    tcp_window: int | None = None  # raw advertised receive window (never scaled)
+    tcp_window_scale: int | None = None  # shift count from a WScale option (SYN / SYN-ACK only)
+    dns: dict | None = None  # full DNS header/question details for transaction matching
 
 
 def extract_packet(scapy_packet, packet_number: int, capture_id: UUID) -> ExtractedPacket:
@@ -143,6 +148,9 @@ def _extract(pkt, number: int, capture_id: UUID) -> ExtractedPacket:
     label = "Other"
     payload_length = None
     metadata: dict | None = None
+    tcp_window: int | None = None
+    tcp_window_scale: int | None = None
+    dns_details: dict | None = None
 
     if ip_layer is None:
         if ether_type == _ETHERTYPE_ARP and pkt.haslayer(ARP):
@@ -193,6 +201,8 @@ def _extract(pkt, number: int, capture_id: UUID) -> ExtractedPacket:
             tcp_acknowledgement_number=int(transport.ack),
         )
         payload_length = _tcp_payload_length(ip_layer, transport)
+        tcp_window = int(transport.window)
+        tcp_window_scale = _window_scale(transport)
         app, metadata = _tcp_application(transport)
     elif isinstance(transport, UDP):
         fields.update(
@@ -207,13 +217,63 @@ def _extract(pkt, number: int, capture_id: UUID) -> ExtractedPacket:
     else:
         app = None
 
+    if app == "DNS":
+        dns_details = _dns_details(transport.payload)
+
     if app is not None:
         fields["application_protocol"] = app
         label = app
     if metadata:
         fields["application_metadata"] = metadata
 
-    return ExtractedPacket(Packet(**fields), label, payload_length, malformed)
+    return ExtractedPacket(
+        Packet(**fields), label, payload_length, malformed,
+        tcp_window=tcp_window, tcp_window_scale=tcp_window_scale, dns=dns_details,
+    )
+
+
+def _window_scale(tcp) -> int | None:
+    """Shift count of a TCP window-scale option, if the segment carries one."""
+    try:
+        for option in tcp.options or ():
+            if isinstance(option, tuple) and len(option) == 2 and option[0] == "WScale":
+                return int(option[1])
+    except Exception:  # noqa: BLE001 - malformed options must never fail the packet
+        return None
+    return None
+
+
+_MAX_DNS_QUESTIONS = 8
+
+
+def _dns_details(dns) -> dict | None:
+    """Header fields and questions needed to pair queries with responses."""
+    try:
+        qd = dns.qd
+        try:
+            items = list(qd) if qd is not None else []
+        except TypeError:
+            items = [qd]
+        questions = []
+        for question in items[:_MAX_DNS_QUESTIONS]:
+            raw = getattr(question, "qname", None)
+            if raw is None:
+                continue
+            name = (raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)).rstrip(".")
+            questions.append({"name": name, "type": int(question.qtype)})
+        return {
+            "id": int(dns.id),
+            "is_response": bool(dns.qr),
+            "opcode": int(dns.opcode),
+            "rcode": int(dns.rcode),
+            "tc": bool(dns.tc),
+            "qdcount": int(dns.qdcount if dns.qdcount is not None else len(questions)),
+            "ancount": int(dns.ancount if dns.ancount is not None else 0),
+            "questions": questions,
+            "query": questions[0]["name"] if questions else None,
+        }
+    except Exception:  # noqa: BLE001 - keep the packet; it just cannot be matched
+        return None
 
 
 def _tcp_payload_length(ip_layer, tcp) -> int:

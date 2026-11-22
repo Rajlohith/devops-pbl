@@ -13,6 +13,10 @@ from flask import current_app
 
 from app.extensions import db
 from app.orm import AnalysisResult, CaptureRecord, FlowRecord, PacketRecord
+from app.services.advanced_persistence import ADVANCED_MODELS, persist_advanced
+from app.services.analytics.anomalies import AnomalyThresholds
+from app.services.analytics.dns_analytics import DnsConfig
+from app.services.analytics.engine import AdvancedAnalyzer
 from app.services.capture_reader import iter_capture_packets
 from app.services.flow_tracker import Flow, FlowTracker
 from app.services.packet_extractor import ExtractedPacket, extract_packet
@@ -27,7 +31,7 @@ class AnalysisError(Exception):
 
 def clear_results(capture_id: UUID) -> None:
     """Delete any stored analysis for a capture (retry, or cleanup after a failure)."""
-    for model in (PacketRecord, FlowRecord, AnalysisResult):
+    for model in (PacketRecord, FlowRecord, AnalysisResult, *ADVANCED_MODELS):
         db.session.execute(db.delete(model).where(model.capture_id == capture_id))
     db.session.commit()
 
@@ -40,6 +44,12 @@ def analyze_file(capture_id: UUID, path: Path) -> int:
     clear_results(capture_id)
     tracker = FlowTracker()
     stats = StatsAccumulator()
+    # Phase 4 analytics ride along on the same single pass; they reuse the flow ids and
+    # retransmission flags computed above rather than re-deriving them.
+    advanced = AdvancedAnalyzer(
+        AnomalyThresholds.from_overrides(current_app.config.get("ANOMALY_THRESHOLDS")),
+        DnsConfig(timeout_seconds=current_app.config.get("DNS_TIMEOUT_SECONDS", 5.0)),
+    )
     batch: list[dict] = []
     count = 0
 
@@ -49,6 +59,7 @@ def analyze_file(capture_id: UUID, path: Path) -> int:
         extracted = extract_packet(scapy_packet, count, capture_id)
         flow_id, is_retransmission = tracker.observe(extracted)
         stats.observe(extracted, is_retransmission)
+        advanced.observe(extracted, flow_id, is_retransmission)
         batch.append(_packet_row(extracted, flow_id, is_retransmission))
         if len(batch) >= batch_size:
             _insert(PacketRecord, batch)
@@ -66,6 +77,18 @@ def analyze_file(capture_id: UUID, path: Path) -> int:
         AnalysisResult(capture_id=capture_id, summary=result["summary"], **result["columns"])
     )
     db.session.commit()
+
+    summary = result["summary"]
+    persist_advanced(
+        capture_id,
+        advanced.finalize(
+            last_ts=stats.last.timestamp() if stats.last else None,
+            total_packets=count,
+            transport_rows=summary["protocols"]["transport"],
+            timeseries=summary["performance"]["timeseries"],
+        ),
+        batch_size,
+    )
     logger.info("Analysed capture %s: %d packets, %d flows", capture_id, count, len(flows))
     return count
 
@@ -110,6 +133,8 @@ def _packet_row(ex: ExtractedPacket, flow_id: int | None, is_retransmission: boo
         "tcp_flags": p.tcp_flags,
         "tcp_sequence_number": p.tcp_sequence_number,
         "tcp_acknowledgement_number": p.tcp_acknowledgement_number,
+        "tcp_window": ex.tcp_window,
+        "tcp_window_scale": ex.tcp_window_scale,
         "udp_length": p.udp_length,
         "payload_length": ex.payload_length,
         "flow_id": flow_id,

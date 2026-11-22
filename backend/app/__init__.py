@@ -19,6 +19,13 @@ def create_app(config: str | type[Config] | None = None) -> Flask:
             "NETSCOPE_SECRET_KEY must be set outside development and testing"
         )
 
+    from app.services.analytics.anomalies import AnomalyThresholds
+
+    try:  # fail at startup, not mid-analysis, on a bad threshold override
+        AnomalyThresholds.from_overrides(app.config.get("ANOMALY_THRESHOLDS"))
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid NETSCOPE_ANOMALY_THRESHOLDS: {exc}") from exc
+
     app.config["CELERY"] = {
         "broker_url": app.config["CELERY_BROKER_URL"],
         "result_backend": app.config["CELERY_RESULT_BACKEND"],

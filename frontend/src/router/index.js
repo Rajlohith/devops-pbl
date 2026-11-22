@@ -84,6 +84,31 @@ export const routes = [
             name: 'capture-performance',
             component: () => import('@/views/CapturePerformanceView.vue'),
           },
+          {
+            path: 'tcp',
+            name: 'capture-tcp',
+            component: () => import('@/views/CaptureTcpView.vue'),
+          },
+          {
+            path: 'dns',
+            name: 'capture-dns',
+            component: () => import('@/views/CaptureDnsView.vue'),
+          },
+          {
+            path: 'traffic',
+            name: 'capture-traffic',
+            component: () => import('@/views/CaptureTrafficView.vue'),
+          },
+          {
+            path: 'diagnostics',
+            name: 'capture-diagnostics',
+            component: () => import('@/views/CaptureDiagnosticsView.vue'),
+          },
+          {
+            path: 'anomalies',
+            name: 'capture-anomalies',
+            component: () => import('@/views/CaptureAnomaliesView.vue'),
+          },
         ],
       },
       {

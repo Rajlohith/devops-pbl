@@ -9,6 +9,13 @@ export const REPORTS = [
   { key: 'protocols', label: 'CSV — protocols', path: '/export/protocols.csv' },
   { key: 'performance', label: 'CSV — performance', path: '/export/performance.csv' },
   { key: 'timeseries', label: 'CSV — traffic over time', path: '/export/timeseries.csv' },
+  { key: 'tcp-connections', label: 'CSV — TCP connections', path: '/export/tcp-connections.csv' },
+  { key: 'tcp-windows', label: 'CSV — TCP windows', path: '/export/tcp-windows.csv' },
+  { key: 'tcp-indicators', label: 'CSV — loss indicators', path: '/export/tcp-indicators.csv' },
+  { key: 'dns-transactions', label: 'CSV — DNS transactions', path: '/export/dns-transactions.csv' },
+  { key: 'top-talkers', label: 'CSV — top talkers', path: '/export/top-talkers.csv' },
+  { key: 'anomalies', label: 'CSV — anomaly findings', path: '/export/anomalies.csv' },
+  { key: 'analytics-summary', label: 'CSV — analytics summary', path: '/export/analytics-summary.csv' },
 ]
 
 /** Pull a filename out of a `Content-Disposition: attachment; filename="..."` header. */

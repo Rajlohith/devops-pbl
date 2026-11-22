@@ -1,5 +1,6 @@
 """Environment-based application configuration."""
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -13,6 +14,32 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _json_env(name: str) -> dict | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a JSON object, got {raw!r}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{name} must be a JSON object, got {raw!r}")
+    return value
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be positive, got {raw!r}")
+    return value
 
 
 class Config:
@@ -36,6 +63,12 @@ class Config:
     MAX_CONTENT_LENGTH = MAX_UPLOAD_BYTES
     MAX_PACKETS_PER_CAPTURE = _int_env("NETSCOPE_MAX_PACKETS", 2_000_000)
     PACKET_BATCH_SIZE = _int_env("NETSCOPE_PACKET_BATCH_SIZE", 5000)
+
+    # Phase 4: rule thresholds (JSON object of overrides, see services/analytics/anomalies.py)
+    # and how long a DNS query must go unanswered, with the capture still running, before it is
+    # reported as an *inferred* timeout.
+    ANOMALY_THRESHOLDS = _json_env("NETSCOPE_ANOMALY_THRESHOLDS")
+    DNS_TIMEOUT_SECONDS = _float_env("NETSCOPE_DNS_TIMEOUT_SECONDS", 5.0)
 
     CELERY_BROKER_URL = os.environ.get(
         "NETSCOPE_REDIS_URL", "redis://localhost:6379/0"

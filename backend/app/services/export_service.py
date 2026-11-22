@@ -132,6 +132,150 @@ def timeseries_rows(result: AnalysisResult):
         yield [p["time"], p["packets"], p["bytes"], p["packets_per_second"], p["bits_per_second"]]
 
 
+# ------------------------------------------------------------- Phase 4 analytics (CSV)
+
+
+def _stream(query):
+    """Rows fetched in server-side chunks so memory stays flat for large captures."""
+    return db.session.execute(query.execution_options(yield_per=_CHUNK)).scalars()
+
+
+TCP_CONNECTION_COLUMNS = [
+    "connection_id", "flow_id", "endpoint_a_ip", "endpoint_a_port", "endpoint_b_ip",
+    "endpoint_b_port", "initiator_known", "state", "incomplete_reason", "first_seen", "last_seen",
+    "duration_seconds", "syn_retransmissions", "syn_to_synack_ms", "synack_to_ack_ms",
+    "handshake_ms", "termination", "terminated_by", "capture_truncated", "truncation_reasons",
+    "packets", "bytes", "rst_packets", "retransmissions", "duplicate_acks", "zero_window_events",
+    "window_scaling",
+]
+
+
+def tcp_connection_rows(query):
+    for c in _stream(query):
+        d = c.to_dict()
+        yield [
+            d["connection_id"], d["flow_id"], d["endpoint_a"]["ip"], d["endpoint_a"]["port"],
+            d["endpoint_b"]["ip"], d["endpoint_b"]["port"], d["initiator_known"], d["state"],
+            d["incomplete_reason"], d["first_seen"], d["last_seen"], d["duration_seconds"],
+            d["syn_retransmissions"], d["syn_to_synack_ms"], d["synack_to_ack_ms"],
+            d["handshake_ms"], d["termination"], d["terminated_by"], d["capture_truncated"],
+            d["truncation_reasons"], d["packets"], d["bytes"], d["rst_packets"],
+            d["retransmissions"], d["duplicate_acks"], d["zero_window_events"], d["window_scaling"],
+        ]
+
+
+TCP_WINDOW_COLUMNS = [
+    "connection_id", "endpoint_a", "endpoint_b", "window_scaling", "side", "scale_shift",
+    "samples", "raw_min", "raw_max", "raw_last", "effective_min", "effective_max",
+    "effective_last", "window_changes", "zero_window_events", "zero_window_packets",
+    "zero_window_evidence_packets",
+]
+
+
+def tcp_window_rows(query):
+    for c in _stream(query):
+        d = c.to_dict(detail=True)
+        for side in ("a", "b"):
+            w = d["window"][side]
+            eff = w["effective"] or {}
+            yield [
+                d["connection_id"], f"{c.endpoint_a_ip}:{c.endpoint_a_port}",
+                f"{c.endpoint_b_ip}:{c.endpoint_b_port}", d["window_scaling"], side,
+                w["scale_shift"], w["samples"], w["raw"]["min"], w["raw"]["max"], w["raw"]["last"],
+                eff.get("min"), eff.get("max"), eff.get("last"), w["changes"],
+                w["zero_window_events"], w["zero_window_packets"], w["zero_window_evidence"],
+            ]
+
+
+TCP_INDICATOR_COLUMNS = [
+    "indicator_id", "connection_id", "flow_id", "endpoint_a", "endpoint_b", "type", "sender",
+    "packet_count", "first_packet", "last_packet", "severity", "confidence", "evidence", "detail",
+]
+
+
+def tcp_indicator_rows(query):
+    for i in _stream(query):
+        d = i.to_dict()
+        yield [d[c] for c in TCP_INDICATOR_COLUMNS]
+
+
+DNS_COLUMNS = [
+    "transaction_id", "transport", "client_ip", "client_port", "server_ip", "server_port",
+    "dns_id", "qname", "qtype", "question_count", "query_packet", "response_packet", "query_time",
+    "response_time", "query_count", "latency_ms", "latency_from_last_query_ms", "rcode",
+    "rcode_name", "truncated", "answer_count", "status", "note",
+]
+
+
+def dns_rows(query):
+    for t in _stream(query):
+        d = t.to_dict()
+        yield [
+            d["transaction_id"], d["transport"], d["client"]["ip"], d["client"]["port"],
+            d["server"]["ip"], d["server"]["port"], d["dns_id"], d["qname"], d["qtype"],
+            d["question_count"], d["query_packet"], d["response_packet"], d["query_time"],
+            d["response_time"], d["query_count"], d["latency_ms"], d["latency_from_last_query_ms"],
+            d["rcode"], d["rcode_name"], d["truncated"], d["answer_count"], d["status"], d["note"],
+        ]
+
+
+ANOMALY_COLUMNS = [
+    "finding_id", "rule", "name", "severity", "description", "reason", "affected_ips",
+    "affected_flows", "packet_refs", "evidence", "thresholds", "note",
+]
+
+
+def anomaly_rows(query):
+    for f in _stream(query):
+        d = f.to_dict()
+        yield [d[c] for c in ANOMALY_COLUMNS]
+
+
+TALKER_COLUMNS = [
+    "rank", "ip", "ip_version", "packets", "bytes", "sent_packets", "sent_bytes",
+    "received_packets", "received_bytes", "percent_of_packets", "percent_of_bytes",
+]
+
+
+def talker_rows(items):
+    for r in items:
+        yield [r[c] for c in TALKER_COLUMNS]
+
+
+DIRECTION_COLUMNS = ["direction", "packets", "bytes", "percent_of_packets", "percent_of_bytes",
+                     "local_networks", "explanation"]
+
+
+def direction_rows(stats: dict):
+    local = ",".join(stats["local_networks"]) or "(none configured)"
+    for name, d in stats["directions"].items():
+        yield [name, d["packets"], d["bytes"], d["percent_of_packets"], d["percent_of_bytes"],
+               local, d["explanation"]]
+
+
+def flatten_rows(section: str, value, prefix: str = ""):
+    """Flatten a nested summary dict into (section, metric, value) rows; lists become JSON cells."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield from flatten_rows(section, inner, f"{prefix}.{key}" if prefix else str(key))
+    else:
+        yield [section, prefix, value]
+
+
+def analytics_summary_rows(document: dict):
+    for section in ("tcp", "resets", "diagnostics", "windows", "dns", "traffic", "anomalies"):
+        value = document[section]
+        if section == "tcp":
+            value = {k: v for k, v in value.items() if k != "charts"}
+        if section == "dns":
+            value = {k: v for k, v in value.items() if k not in ("charts", "servers")}
+        yield from flatten_rows(section, value)
+    for key, text in document["definitions"].items():
+        yield ["definition", key, text]
+    for i, text in enumerate(document["limitations"], start=1):
+        yield ["limitation", str(i), text]
+
+
 # ------------------------------------------------------------------------------- PDF
 
 
@@ -162,7 +306,8 @@ def _num(value, digits=2, suffix="") -> str:
 
 
 def build_pdf(capture: CaptureRecord, result: AnalysisResult, top_flows: list[FlowRecord],
-              compress: bool = True) -> bytes:
+              compress: bool = True, advanced: dict | None = None, findings: list | None = None,
+              direction: dict | None = None) -> bytes:
     from reportlab.graphics.charts.barcharts import VerticalBarChart
     from reportlab.graphics.charts.lineplots import LinePlot
     from reportlab.graphics.shapes import Drawing, String
@@ -311,6 +456,8 @@ def build_pdf(capture: CaptureRecord, result: AnalysisResult, top_flows: list[Fl
     else:
         story.append(para("No flows.", small))
 
+    story += _advanced_story(advanced, findings or [], direction, para, table, h2, small, body, mm)
+
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
@@ -326,6 +473,124 @@ def build_pdf(capture: CaptureRecord, result: AnalysisResult, top_flows: list[Fl
     )
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return buffer.getvalue()
+
+
+def _pct(value, digits=2) -> str:
+    return "n/a" if value is None else f"{100 * value:.{digits}f}%"
+
+
+def _dist(d, unit) -> str:
+    if not d:
+        return "not available (no measurements)"
+    return (f"min {d['min']:.2f} / mean {d['mean']:.2f} / median {d['median']:.2f} / "
+            f"p95 {d['p95']:.2f} / max {d['max']:.2f} {unit}  (n={d['count']})")
+
+
+def _advanced_story(doc, findings, direction, para, table, h2, small, body, mm):
+    """Phase 4 sections. Every metric is shown with its definition and measurement limits."""
+    from reportlab.platypus import PageBreak, Paragraph, Spacer
+
+    if doc is None:
+        return [Paragraph("Advanced network analytics", h2),
+                para("Not available: this capture was analysed before advanced analytics existed.", small)]
+
+    tcp, resets, diag, win, dns = doc["tcp"], doc["resets"], doc["diagnostics"], doc["windows"], doc["dns"]
+    states = tcp["states"]
+    out = [PageBreak(), Paragraph("Advanced network analytics", h2),
+           para("Values marked n/a could not be measured from this capture and are never estimated.", small),
+           Paragraph("TCP connections", h2),
+           table([
+               ["Metric", "Value"],
+               ["Connections tracked", f"{tcp['total_connections']:,}"],
+               ["Established / incomplete / refused / unclassified",
+                f"{states['established']:,} / {states['incomplete']:,} / {states['refused']:,} / {states['unclassified']:,}"],
+               ["Observable attempts (initial SYN captured)", f"{tcp['observable_attempts']:,}"],
+               ["Connection success rate", _pct(tcp["success_rate"])],
+               ["Confirmed failure rate (refused)", _pct(tcp["confirmed_failure_rate"])],
+               ["Incomplete (not confirmed failures)", _pct(tcp["incomplete_rate"])],
+               ["Handshake time (ms)", _dist(tcp["handshake_ms"], "ms")],
+               ["Observed lifetime (s)", _dist(tcp["lifetime_seconds"], "s")],
+               ["Terminated by FIN / RST / half-closed / not observed",
+                " / ".join(f"{tcp['terminations'][k]:,}" for k in ("fin", "reset", "half_closed", "none"))],
+               ["Capture-truncated connections", f"{tcp['capture_truncated_connections']:,}"],
+           ], [75 * mm, 95 * mm]),
+           Paragraph("TCP resets", h2),
+           table([
+               ["Metric", "Value"],
+               ["RST packets / TCP packets", f"{resets['rst_packets']:,} / {resets['tcp_packets']:,}  ({_pct(resets['packet_rate'])})"],
+               ["Connections with a reset / tracked connections",
+                f"{resets['connections_with_reset']:,} / {resets['tcp_connections']:,}  ({_pct(resets['connection_rate'])})"],
+               ["Reset before / after establishment / unclassified",
+                f"{resets['reset_before_established']:,} / {resets['reset_after_established']:,} / {resets['reset_unclassified']:,}"],
+           ], [75 * mm, 95 * mm]),
+           Paragraph("Packet-loss indicators and TCP window", h2),
+           para("Retransmissions, duplicate ACKs and sequence gaps are indicators only. A single "
+                "capture cannot measure packet loss, so no loss percentage is reported.", small),
+           table([["Indicator", "Events", "Connections"]] + [
+               [k.replace("_", " "), f"{v['events']:,}", f"{v['connections']:,}"]
+               for k, v in sorted(diag["indicator_types"].items())
+           ] or [["none observed", "0", "0"]], [70 * mm, 40 * mm, 40 * mm]),
+           Spacer(1, 2 * mm),
+           table([
+               ["Window metric", "Value"],
+               ["Connections with zero-window advertisements", f"{win['connections_with_zero_window']:,}"],
+               ["Zero-window events", f"{win['zero_window_events']:,}"],
+               ["Window scaling status", ", ".join(f"{k}: {v}" for k, v in win["scaling_status"].items()) or "n/a"],
+               ["Largest effective window (bytes)",
+                "n/a (scale unknown)" if win["max_effective_window_bytes"] is None else f"{win['max_effective_window_bytes']:,}"],
+           ], [75 * mm, 95 * mm]),
+           Paragraph("DNS", h2)]
+    if not dns["available"]:
+        out.append(para("No DNS traffic was identified in this capture.", small))
+    else:
+        out += [table([
+            ["Metric", "Value"],
+            ["Queries / answered", f"{dns['queries']:,} / {dns['answered']:,}"],
+            ["Unanswered: inferred timeout / indeterminate",
+             f"{dns['unanswered']['inferred_timeout']:,} / {dns['unanswered']['indeterminate']:,}"],
+            ["Unmatched responses", f"{dns['unmatched_responses']:,}"],
+            ["Response time", _dist(dns["latency_ms"], "ms")],
+            ["Responses observed", f"{dns['responses_observed']:,}"],
+            ["Error response rate (RCODE != NOERROR)", _pct(dns["error_response_rate"])],
+            ["Server failure rate (excl. NXDOMAIN)", _pct(dns["server_failure_rate"])],
+            ["NXDOMAIN rate", _pct(dns["nxdomain_rate"])],
+            ["Response codes", ", ".join(f"{k}: {v}" for k, v in dns["rcodes"].items()) or "n/a"],
+        ], [75 * mm, 95 * mm])]
+    top = doc["traffic"]["top_by_bytes"]
+    out.append(Paragraph("Top talkers (sent + received bytes)", h2))
+    out.append(table([["#", "Address", "Packets", "Bytes", "% of IP bytes"]] + [
+        [str(r["rank"]), r["ip"], f"{r['packets']:,}", human_bytes(r["bytes"]),
+         "n/a" if r["percent_of_bytes"] is None else f"{r['percent_of_bytes']:.1f}"] for r in top
+    ], [10 * mm, 70 * mm, 28 * mm, 32 * mm, 30 * mm]) if top else para("No IP traffic.", small))
+    out.append(para("Percentages use total IP bytes as the denominator; each packet has two endpoints, "
+                    "so bidirectional shares add up to about 200%.", small))
+    out.append(Paragraph("Inbound / outbound traffic", h2))
+    if direction is None or not direction["configured"]:
+        out.append(para("Direction is not classified: no local networks were configured for this report "
+                        "(private address ranges are not assumed to be local). All traffic is 'unknown'.", small))
+    else:
+        out.append(para("Local networks: " + ", ".join(direction["local_networks"]), small))
+        out.append(table([["Direction", "Packets", "Bytes", "% of bytes"]] + [
+            [k, f"{v['packets']:,}", human_bytes(v["bytes"]),
+             "n/a" if v["percent_of_bytes"] is None else f"{v['percent_of_bytes']:.1f}"]
+            for k, v in direction["directions"].items()
+        ], [40 * mm, 40 * mm, 45 * mm, 45 * mm]))
+    out.append(Paragraph("Anomaly findings", h2))
+    out.append(para("Rule-based heuristics. A finding is not proof of malicious activity.", small))
+    if findings:
+        out.append(table([["Severity", "Rule", "Reason"]] + [
+            [f.severity, f.rule, para(f.reason, small)] for f in findings
+        ], [20 * mm, 45 * mm, 105 * mm]))
+        total = doc["anomalies"]["total"]
+        if total > len(findings):
+            out.append(para(f"Showing the {len(findings)} highest-severity of {total} findings; see the CSV export for all.", small))
+    else:
+        out.append(para("No findings.", small))
+    out += [Paragraph("Metric definitions", h2)]
+    out += [para(f"{k.replace('_', ' ')}: {v}", small) for k, v in doc["definitions"].items()]
+    out += [Paragraph("Measurement limitations", h2)]
+    out += [para(f"- {t}", small) for t in doc["limitations"]]
+    return out
 
 
 def _endpoint(ip: str, port) -> str:

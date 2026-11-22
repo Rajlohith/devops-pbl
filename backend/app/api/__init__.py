@@ -16,6 +16,7 @@ def api_error(code: int, message: str, name: str | None = None, **extra):
 
 
 def register_api(app: Flask) -> None:
+    from app.api.advanced import bp as advanced_bp
     from app.api.analysis import bp as analysis_bp
     from app.api.auth import bp as auth_bp
     from app.api.captures import bp as captures_bp
@@ -28,6 +29,7 @@ def register_api(app: Flask) -> None:
     app.register_blueprint(auth_bp, url_prefix=f"{API_PREFIX}/auth")
     app.register_blueprint(captures_bp, url_prefix=f"{API_PREFIX}/captures")
     app.register_blueprint(analysis_bp, url_prefix=f"{API_PREFIX}/captures")
+    app.register_blueprint(advanced_bp, url_prefix=f"{API_PREFIX}/captures")
     app.register_blueprint(dashboard_bp, url_prefix=API_PREFIX)
     app.register_blueprint(reports_bp, url_prefix=f"{API_PREFIX}/captures")
     _register_error_handlers(app)

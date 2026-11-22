@@ -42,6 +42,18 @@ const tabs = computed(() => {
   ]
 })
 
+// Phase 4 sections live in a second nav so the original five tabs stay exactly as they were.
+const intelligenceTabs = computed(() => {
+  const params = { id: props.id }
+  return [
+    { label: 'TCP Connections', to: { name: 'capture-tcp', params } },
+    { label: 'DNS Analytics', to: { name: 'capture-dns', params } },
+    { label: 'Traffic Intelligence', to: { name: 'capture-traffic', params } },
+    { label: 'TCP Diagnostics', to: { name: 'capture-diagnostics', params } },
+    { label: 'Anomaly Detection', to: { name: 'capture-anomalies', params } },
+  ]
+})
+
 async function remove() {
   const name = capture.value.original_filename
   if (!window.confirm(`Delete ${name} and all of its analysis permanently?`)) return
@@ -110,6 +122,7 @@ async function remove() {
 
       <template v-if="detail.isCompleted">
         <TabNav class="mt-6" :tabs="tabs" label="Capture sections" />
+        <TabNav class="mt-1" :tabs="intelligenceTabs" label="Network intelligence sections" />
         <div class="mt-4"><RouterView :key="capture.id" /></div>
       </template>
       <ProgressCard v-else class="mt-4" :capture="capture" />

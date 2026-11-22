@@ -11,6 +11,7 @@ import StatusSummary from '@/components/dashboard/StatusSummary.vue'
 import { usePolling } from '@/composables/usePolling'
 import { useDashboardStore } from '@/stores/dashboard'
 import { capturesBytesBar, protocolDoughnut } from '@/utils/charts'
+import { pct, SEVERITIES } from '@/utils/analytics'
 import { bytes, num } from '@/utils/format'
 
 const store = useDashboardStore()
@@ -89,6 +90,40 @@ onBeforeUnmount(poller.stop)
           empty-text="No protocol data yet."
         />
       </div>
+
+      <AppCard
+        v-if="data.network_intelligence?.captures_included"
+        title="Network intelligence"
+        :subtitle="`Pooled across your ${data.network_intelligence.captures_included} most recent analysed captures`"
+        data-testid="network-intelligence"
+      >
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <StatCard
+            label="TCP connection success"
+            :value="pct(data.network_intelligence.tcp.success_rate)"
+            :hint="`${num(data.network_intelligence.tcp.established)} of ${num(data.network_intelligence.tcp.observable_attempts)} observable attempts`"
+          />
+          <StatCard
+            label="DNS error responses"
+            :value="pct(data.network_intelligence.dns.error_rate)"
+            :hint="`${num(data.network_intelligence.dns.queries)} queries`"
+          />
+          <StatCard
+            label="TCP reset rate"
+            :value="pct(data.network_intelligence.resets.packet_rate, 2)"
+            hint="RST packets / TCP packets"
+          />
+          <StatCard
+            label="Anomaly findings"
+            :value="num(data.network_intelligence.anomalies.total)"
+            :hint="SEVERITIES.map((s) => `${data.network_intelligence.anomalies.by_severity[s]} ${s}`).join(' · ')"
+          />
+        </div>
+        <p class="mt-3 text-xs text-slate-500">
+          Rates are pooled from counts, not averaged; an em dash means nothing could be measured.
+          Retransmissions are indicators, not measured packet loss.
+        </p>
+      </AppCard>
 
       <RecentSessionsTable :sessions="data.recent_sessions" />
     </template>
