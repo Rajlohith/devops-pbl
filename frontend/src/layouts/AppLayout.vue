@@ -2,8 +2,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import AppSidebar from '@/components/AppSidebar.vue'
-import AppTopbar from '@/components/AppTopbar.vue'
+import AppSidebar from '@/components/common/AppSidebar.vue'
+import AppTopbar from '@/components/common/AppTopbar.vue'
 
 const route = useRoute()
 const sidebarOpen = ref(false)

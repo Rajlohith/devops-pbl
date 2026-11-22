@@ -32,13 +32,16 @@ def register_api(app: Flask) -> None:
     app.register_blueprint(reports_bp, url_prefix=f"{API_PREFIX}/captures")
     _register_error_handlers(app)
 
-    from flask import redirect, request, url_for
+    from urllib.parse import urlencode
+
+    from flask import redirect, request
 
     @login_manager.unauthorized_handler
     def unauthorized():
         if request.path.startswith(API_PREFIX):
             return api_error(401, "Authentication required.")
-        return redirect(url_for("web.login", next=request.path))
+        # Anything else that needs a login is a page of the single-page app.
+        return redirect("/login?" + urlencode({"next": request.path}))
 
     from app.services.auth_service import load_user
 

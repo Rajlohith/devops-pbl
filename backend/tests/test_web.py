@@ -1,122 +1,179 @@
-import re
+"""Serving the Vue single-page app, and the session/CSRF contract it relies on."""
+
+import io
 import uuid
 
 import pytest
 
-from app.extensions import db
-from app.orm import CaptureRecord
+from app.web.spa import CONTENT_SECURITY_POLICY
 from tests.conftest import register, upload
 
-PAGES = ["/dashboard", "/captures", "/compare"]
+INDEX = "<!doctype html><title>NetScope</title><div id=app></div>"
+ROUTES = ["/", "/login", "/register", "/dashboard", "/captures", "/compare", f"/captures/{uuid.uuid4()}/packets"]
 
 
-def test_root_redirects_by_auth_state(client):
-    assert client.get("/").headers["Location"].endswith("/login")
-    register(client)
-    assert client.get("/").headers["Location"].endswith("/dashboard")
+@pytest.fixture
+def dist(app, tmp_path):
+    """A stand-in for the Vite build output, so these tests do not need Node."""
+    root = tmp_path / "dist"
+    (root / "assets").mkdir(parents=True)
+    (root / "index.html").write_text(INDEX)
+    (root / "assets" / "app-1a2b3c.js").write_text("console.log('app')")
+    (root / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+    (tmp_path / "secret.txt").write_text("not for the web")
+    app.config["FRONTEND_DIST_DIR"] = str(root)
+    return root
 
 
-@pytest.mark.parametrize("path", PAGES)
-def test_protected_pages_redirect_to_login(client, path):
+@pytest.mark.parametrize("path", ROUTES)
+def test_client_side_routes_receive_the_app_shell(client, dist, path):
     response = client.get(path)
-    assert response.status_code == 302
-    assert f"/login?next={path}" in response.headers["Location"]
-
-
-def test_capture_page_redirects_to_login_when_anonymous(client):
-    response = client.get(f"/captures/{uuid.uuid4()}")
-    assert response.status_code == 302 and "/login" in response.headers["Location"]
-
-
-def test_register_login_logout_pages(client):
-    assert b"Create an account" in client.get("/register").data
-
-    bad = client.post("/register", data={"email": "nope", "password": "x"})
-    assert bad.status_code == 400 and b"valid email" in bad.data
-
-    ok = client.post("/register", data={"email": "web@example.com", "password": "correct-horse-battery"})
-    assert ok.status_code == 302 and ok.headers["Location"].endswith("/dashboard")
-    assert b"web@example.com" in client.get("/dashboard").data
-
-    client.post("/logout")
-    assert client.get("/dashboard").status_code == 302
-
-    wrong = client.post("/login", data={"email": "web@example.com", "password": "wrong-password"})
-    assert wrong.status_code == 401 and b"Invalid email or password" in wrong.data
-    good = client.post("/login", data={"email": "web@example.com", "password": "correct-horse-battery"})
-    assert good.status_code == 302 and good.headers["Location"].endswith("/dashboard")
-
-
-def test_login_returns_to_the_requested_page(client):
-    register(client, "next@example.com")
-    client.post("/logout")
-    response = client.post(
-        "/login?next=/compare", data={"email": "next@example.com", "password": "correct-horse-battery"}
-    )
-    assert response.headers["Location"].endswith("/compare")
-
-
-def test_login_next_param_rejects_external_redirects(client):
-    register(client, "next@example.com")
-    client.post("/logout")
-    for evil in ["https://evil.example/", "//evil.example", "/\\evil.example"]:
-        response = client.post(
-            f"/login?next={evil}",
-            data={"email": "next@example.com", "password": "correct-horse-battery"},
-        )
-        assert response.headers["Location"].endswith("/dashboard"), evil
-        client.post("/logout")
-
-
-def test_web_forms_require_csrf_token(app, make_client):
-    app.config["WTF_CSRF_ENABLED"] = True
-    client = make_client()
-    assert client.post("/login", data={"email": "a@b.co", "password": "x"}).status_code == 400
-
-    page = client.get("/login").data.decode()
-    token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
-    response = client.post("/login", data={"email": "a@b.co", "password": "x", "csrf_token": token})
-    assert response.status_code == 401  # got past CSRF; credentials simply wrong
-
-
-@pytest.mark.parametrize("path, script", [
-    ("/dashboard", "dashboard.js"), ("/captures", "captures.js"), ("/compare", "compare.js"),
-])
-def test_pages_load_their_scripts_and_a_csrf_token(client, path, script):
-    register(client)
-    html = client.get(path).data.decode()
-    assert f"js/{script}" in html and "js/ns.js" in html and "vendor/chart.umd.js" in html
-    assert re.search(r'<meta name="csrf-token" content="[^"]+">', html)
-    assert "cdn." not in html  # no third-party runtime dependencies
-
-
-def test_static_assets_are_served(client):
-    for path in ("/static/css/app.css", "/static/js/ns.js", "/static/js/capture.js", "/static/vendor/chart.umd.js"):
-        response = client.get(path)
-        assert response.status_code == 200 and len(response.data) > 1000, path
-
-
-def test_capture_page_shell_for_the_owner(auth_client, pcap_bytes):
-    cid = upload(auth_client, pcap_bytes, "mine.pcap").get_json()["capture"]["id"]
-    response = auth_client.get(f"/captures/{cid}")
     assert response.status_code == 200
-    html = response.data.decode()
-    assert f'data-capture-id="{cid}"' in html and "mine.pcap" in html and "js/capture.js" in html
+    assert response.mimetype == "text/html" and INDEX in response.get_data(as_text=True)
+    assert response.headers["Cache-Control"] == "no-cache"
 
 
-def test_other_users_capture_page_is_404(auth_client, make_client, pcap_bytes):
-    cid = upload(auth_client, pcap_bytes, "mine.pcap").get_json()["capture"]["id"]
+def test_shell_is_public_and_carries_no_user_data(auth_client, make_client, dist, pcap_bytes):
+    cid = upload(auth_client, pcap_bytes, "private-name.pcap").get_json()["capture"]["id"]
+    anonymous = make_client()
+    owner_page = auth_client.get(f"/captures/{cid}").get_data(as_text=True)
+    anon_page = anonymous.get(f"/captures/{cid}").get_data(as_text=True)
+    assert owner_page == anon_page == INDEX  # access control lives in the API, not the shell
+    assert "private-name" not in anon_page
+    # ...and the API is what refuses the stranger
+    assert anonymous.get(f"/api/v1/captures/{cid}").status_code == 401
+
+
+def test_shell_sets_a_strict_content_security_policy(client, dist):
+    headers = client.get("/dashboard").headers
+    assert headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
+    assert "script-src 'self'" in CONTENT_SECURITY_POLICY and "frame-ancestors 'none'" in CONTENT_SECURITY_POLICY
+    assert "unsafe-eval" not in CONTENT_SECURITY_POLICY
+    assert headers["X-Frame-Options"] == "DENY" and headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_fingerprinted_assets_are_cached_and_real_files_served(client, dist):
+    asset = client.get("/assets/app-1a2b3c.js")
+    assert asset.status_code == 200 and "immutable" in asset.headers["Cache-Control"]
+    assert client.get("/favicon.svg").status_code == 200
+
+
+@pytest.mark.parametrize("path", [
+    "/assets/missing.js",          # a missing asset must never become HTML
+    "/something.png",
+    "/assets/..%2f..%2fsecret.txt",  # path traversal
+    "/..%2fsecret.txt",
+    "/assets/%2e%2e/%2e%2e/secret.txt",
+])
+def test_missing_files_and_traversal_are_404(client, dist, path):
+    response = client.get(path)
+    assert response.status_code == 404
+    assert b"not for the web" not in response.data and INDEX not in response.get_data(as_text=True)
+
+
+def test_unknown_api_paths_are_json_404_not_the_shell(client, dist):
+    for path in ("/api", "/api/v1", "/api/v1/nope", "/api/v2/anything"):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert INDEX not in response.get_data(as_text=True)
+    body = client.get("/api/v1/nope").get_json()
+    assert body["error"]["code"] == 404
+
+
+def test_missing_build_gives_a_helpful_503(client, app, tmp_path):
+    app.config["FRONTEND_DIST_DIR"] = str(tmp_path / "no-such-build")
+    response = client.get("/dashboard")
+    assert response.status_code == 503 and b"npm --prefix frontend run build" in response.data
+
+
+def test_old_server_rendered_form_endpoints_are_gone(client, dist):
+    for path in ("/login", "/register", "/logout"):
+        assert client.post(path, data={"email": "a@b.co", "password": "x"}).status_code == 405
+
+
+def test_protected_api_answers_401_json_never_a_redirect(client):
+    for path in ("/api/v1/dashboard", "/api/v1/captures", "/api/v1/auth/me", "/api/v1/compare"):
+        response = client.get(path)
+        assert response.status_code == 401 and response.is_json, path
+        assert response.get_json()["error"]["code"] == 401
+
+
+# ---------------------------------------------------------------- the session + CSRF contract
+# Everything below is exactly what the Vue client does, with CSRF protection switched ON.
+
+
+@pytest.fixture
+def csrf_app(app):
+    app.config["WTF_CSRF_ENABLED"] = True
+    return app
+
+
+def _token(client):
+    # The test fixture keeps a single app context open, so Flask-WTF's per-request cache on `g`
+    # would leak between requests; a real request always starts with a clean `g`.
+    from flask import g
+
+    g.pop("csrf_token", None)
+    return client.get("/api/v1/auth/csrf").get_json()["csrf_token"]
+
+
+def test_register_login_logout_round_trip_with_csrf(csrf_app, make_client):
+    client = make_client()
+    creds = {"email": "vue@example.com", "password": "correct-horse-battery"}
+
+    missing = client.post("/api/v1/auth/register", json=creds)  # no token
+    assert missing.status_code == 400 and "CSRF" in missing.get_json()["error"]["message"]
+
+    registered = client.post("/api/v1/auth/register", json=creds, headers={"X-CSRFToken": _token(client)})
+    assert registered.status_code == 201
+    assert client.get("/api/v1/auth/me").get_json()["user"]["email"] == "vue@example.com"
+
+    # Registration replaced the session, so the old token is no longer valid for it...
+    stale = client.post("/api/v1/auth/logout", headers={"X-CSRFToken": "not-the-token"})
+    assert stale.status_code == 400
+    # ...and a fresh one works.
+    assert client.post("/api/v1/auth/logout", headers={"X-CSRFToken": _token(client)}).status_code == 200
+    assert client.get("/api/v1/auth/me").status_code == 401  # logout invalidated the session
+
+    bad = client.post("/api/v1/auth/login", json={**creds, "password": "wrong-password"},
+                      headers={"X-CSRFToken": _token(client)})
+    assert bad.status_code == 401 and bad.get_json()["error"]["message"] == "Invalid email or password."
+    good = client.post("/api/v1/auth/login", json=creds, headers={"X-CSRFToken": _token(client)})
+    assert good.status_code == 200 and good.get_json()["user"]["email"] == "vue@example.com"
+
+
+def test_registration_errors_expose_per_field_messages(csrf_app, make_client):
+    client = make_client()
+    response = client.post(
+        "/api/v1/auth/register", json={"email": "nope", "password": "x"}, headers={"X-CSRFToken": _token(client)}
+    )
+    errors = response.get_json()["error"]["errors"]
+    assert response.status_code == 400 and set(errors) == {"email", "password"}
+    again = make_client()
+    ok = {"email": "dup@example.com", "password": "correct-horse-battery"}
+    assert again.post("/api/v1/auth/register", json=ok, headers={"X-CSRFToken": _token(again)}).status_code == 201
     other = make_client()
-    register(other, "other@example.com")
-    assert other.get(f"/captures/{cid}").status_code == 404
-    assert other.get(f"/captures/{uuid.uuid4()}").status_code == 404
-    assert auth_client.get(f"/captures/{cid}").status_code == 200
+    assert other.post("/api/v1/auth/register", json=ok, headers={"X-CSRFToken": _token(other)}).status_code == 409
 
 
-def test_filename_is_escaped_in_the_page_title(auth_client, pcap_bytes):
-    cid = upload(auth_client, pcap_bytes, "mine.pcap").get_json()["capture"]["id"]
-    record = db.session.get(CaptureRecord, uuid.UUID(cid))
-    record.original_filename = "<script>alert(1)</script>.pcap"  # as if a hostile name had been stored
-    db.session.commit()
-    html = auth_client.get(f"/captures/{cid}").data.decode()
-    assert "<script>alert(1)" not in html and "&lt;script&gt;alert(1)" in html
+def test_upload_and_delete_require_the_csrf_header(csrf_app, make_client, pcap_bytes):
+    client = make_client()
+    register_headers = {"X-CSRFToken": _token(client)}
+    client.post("/api/v1/auth/register", json={"email": "up@example.com", "password": "correct-horse-battery"},
+                headers=register_headers)
+
+    def post_file(headers):
+        return client.post("/api/v1/captures", data={"file": (io.BytesIO(pcap_bytes), "a.pcap")},
+                           content_type="multipart/form-data", headers=headers)
+
+    assert post_file({}).status_code == 400
+    created = post_file({"X-CSRFToken": _token(client)})
+    assert created.status_code == 201
+    cid = created.get_json()["capture"]["id"]
+    assert client.delete(f"/api/v1/captures/{cid}").status_code == 400
+    assert client.delete(f"/api/v1/captures/{cid}", headers={"X-CSRFToken": _token(client)}).status_code == 204
+
+
+def test_session_cookie_is_not_readable_by_scripts(client):
+    register(client)
+    assert client.get_cookie("session").http_only is True

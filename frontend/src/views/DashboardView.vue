@@ -1,50 +1,38 @@
 <script setup>
-import AppCard from '@/components/AppCard.vue'
-import BaseChart from '@/components/BaseChart.vue'
-import StatCard from '@/components/StatCard.vue'
-import { useAuthStore } from '@/stores/auth'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 
-const auth = useAuthStore()
+import ChartCard from '@/components/charts/ChartCard.vue'
+import AlertBanner from '@/components/common/AlertBanner.vue'
+import AppCard from '@/components/common/AppCard.vue'
+import StateBlock from '@/components/common/StateBlock.vue'
+import StatCard from '@/components/common/StatCard.vue'
+import RecentSessionsTable from '@/components/dashboard/RecentSessionsTable.vue'
+import StatusSummary from '@/components/dashboard/StatusSummary.vue'
+import { usePolling } from '@/composables/usePolling'
+import { useDashboardStore } from '@/stores/dashboard'
+import { capturesBytesBar, protocolDoughnut } from '@/utils/charts'
+import { bytes, num } from '@/utils/format'
 
-// Placeholders only: no dashboard data is loaded in this foundation step.
-const stats = [
-  { label: 'Captures', hint: 'Uploaded and analysed' },
-  { label: 'Packets analysed', hint: 'Across all captures' },
-  { label: 'Total traffic', hint: 'Bytes on the wire' },
-  { label: 'Active jobs', hint: 'Queued or processing' },
-]
+const store = useDashboardStore()
+const poller = usePolling(() => store.fetch({ silent: true }), { interval: 2500 })
 
-const trafficData = {
-  labels: [],
-  datasets: [
-    {
-      label: 'Packets',
-      data: [],
-      borderColor: '#2563eb',
-      backgroundColor: 'rgba(37, 99, 235, 0.1)',
-      fill: true,
-      tension: 0.3,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-  ],
-}
-const trafficOptions = {
-  plugins: { legend: { display: false } },
-  scales: { y: { beginAtZero: true } },
-}
+const data = computed(() => store.data)
+const trafficChart = computed(() =>
+  data.value?.recent_traffic.length ? capturesBytesBar(data.value.recent_traffic) : null,
+)
+const protocolChart = computed(() =>
+  data.value?.protocols.transport.length ? protocolDoughnut(data.value.protocols.transport) : null,
+)
 
-const protocolData = {
-  labels: ['TCP', 'UDP', 'ICMP', 'DNS', 'HTTP'],
-  datasets: [{ label: 'Packets', data: [], backgroundColor: '#2563eb', borderRadius: 3 }],
-}
-const protocolOptions = {
-  indexAxis: 'y',
-  plugins: { legend: { display: false } },
-  scales: { x: { beginAtZero: true } },
-}
+// Keep the numbers live only while something is being analysed.
+watch(
+  () => store.inProgress,
+  (count) => (count > 0 ? poller.start() : poller.stop()),
+  { immediate: true },
+)
 
-const columns = ['Capture', 'Status', 'Packets', 'Size', 'Uploaded']
+onMounted(() => store.fetch())
+onBeforeUnmount(poller.stop)
 </script>
 
 <template>
@@ -54,67 +42,55 @@ const columns = ['Capture', 'Status', 'Packets', 'Size', 'Uploaded']
       <p class="mt-1 text-slate-500">Traffic captured and analysed across your sessions.</p>
     </div>
 
-    <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-blue-900">
-      <p class="font-medium">Frontend foundation preview</p>
-      <p class="mt-0.5 text-blue-800">
-        This dashboard is a placeholder and is not connected to data yet. The existing NetScope
-        pages remain the working interface while they are migrated.
-        <span v-if="auth.status === 'anonymous'">You are not signed in.</span>
-      </p>
-    </div>
-
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <StatCard v-for="stat in stats" :key="stat.label" v-bind="stat" />
-    </div>
-
-    <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
-      <AppCard
-        class="xl:col-span-2"
-        title="Traffic over time"
-        subtitle="Packets per interval across recent captures"
-      >
-        <BaseChart
-          type="line"
-          :data="trafficData"
-          :options="trafficOptions"
-          aria-label="Line chart of packets over time; no data yet"
-        />
-      </AppCard>
-
-      <AppCard title="Protocol distribution" subtitle="Packets by protocol">
-        <BaseChart
-          type="bar"
-          :data="protocolData"
-          :options="protocolOptions"
-          aria-label="Bar chart of packets by protocol; no data yet"
-        />
-      </AppCard>
-    </div>
-
-    <AppCard title="Recent captures">
-      <div class="-m-4 overflow-x-auto">
-        <table class="min-w-full text-left">
-          <thead class="border-b border-slate-100 bg-slate-50">
-            <tr>
-              <th
-                v-for="column in columns"
-                :key="column"
-                scope="col"
-                class="whitespace-nowrap px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
-              >
-                {{ column }}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td :colspan="columns.length" class="px-4 py-10 text-center text-slate-400">
-                No captures to display yet.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <AppCard v-if="store.loading && !data" flush>
+      <StateBlock kind="loading" message="Loading dashboard…" />
     </AppCard>
+
+    <AppCard v-else-if="store.error && !data" flush>
+      <StateBlock kind="error" :message="store.error.message" @retry="store.fetch()" />
+    </AppCard>
+
+    <AppCard v-else-if="store.isEmpty" flush>
+      <StateBlock kind="empty">
+        <h3 class="text-lg font-semibold text-slate-900">No captures yet</h3>
+        <p class="mt-1 text-slate-500">Upload a PCAP or PCAPNG file to see traffic statistics here.</p>
+        <RouterLink class="btn btn-primary mt-4" :to="{ name: 'captures' }">Upload a capture</RouterLink>
+      </StateBlock>
+    </AppCard>
+
+    <template v-else-if="data">
+      <AlertBanner v-if="data.totals.captures && !data.recent_traffic.length" kind="info">
+        None of your captures has been analysed yet, so there are no traffic figures to show.
+      </AlertBanner>
+
+      <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <StatCard label="Total captures" :value="num(data.totals.captures)" />
+        <StatCard label="Packets analysed" :value="num(data.totals.packets)" />
+        <StatCard label="Data processed" :value="bytes(data.totals.bytes)" />
+        <StatCard label="Unique IPs" :value="num(data.totals.unique_ips)" />
+        <StatCard label="Flows" :value="num(data.totals.flows)" />
+      </div>
+
+      <StatusSummary :counts="data.status_counts" :in-progress="data.in_progress" />
+
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ChartCard
+          title="Data per analysed capture"
+          subtitle="Most recent completed analyses"
+          :config="trafficChart"
+          aria-label="Bar chart of bytes captured per recent analysis"
+          empty-text="No completed analyses yet."
+        />
+        <ChartCard
+          title="Protocol distribution"
+          subtitle="Packets by transport protocol"
+          :config="protocolChart"
+          aria-label="Doughnut chart of packets by transport protocol"
+          empty-text="No protocol data yet."
+        />
+      </div>
+
+      <RecentSessionsTable :sessions="data.recent_sessions" />
+    </template>
   </div>
 </template>

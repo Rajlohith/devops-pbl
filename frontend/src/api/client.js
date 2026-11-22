@@ -74,7 +74,11 @@ apiClient.interceptors.response.use(
       return apiClient.request(config)
     }
 
-    if (apiError.isUnauthorized && unauthorizedHandler) unauthorizedHandler(apiError)
+    // Login, registration and the initial `/auth/me` probe expect 401s; they opt out with
+    // `skipAuthRedirect` so a wrong password is not mistaken for an expired session.
+    if (apiError.isUnauthorized && unauthorizedHandler && !config?.skipAuthRedirect) {
+      unauthorizedHandler(apiError)
+    }
     return Promise.reject(apiError)
   },
 )

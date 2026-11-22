@@ -23,10 +23,16 @@ export default defineConfig(({ mode }) => {
     server: { port: 5173, strictPort: true, proxy },
     preview: { port: 4173, strictPort: true, proxy },
     build: {
-      // Kept separate from static/, which Flask still serves for the existing pages.
+      // Flask serves this directory in production (see NETSCOPE_FRONTEND_DIST).
       outDir: 'dist',
       emptyOutDir: true,
-      sourcemap: true,
+      sourcemap: false,
+    },
+    test: {
+      environment: 'jsdom',
+      globals: true,
+      setupFiles: ['./tests/setup.js'],
+      include: ['tests/**/*.spec.js'],
     },
   }
 })

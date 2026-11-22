@@ -44,6 +44,12 @@ class Config:
         "NETSCOPE_REDIS_URL", "redis://localhost:6379/0"
     )
 
+    # The production Vue build (`npm --prefix frontend run build`) that Flask serves.
+    FRONTEND_DIST_DIR = os.environ.get(
+        "NETSCOPE_FRONTEND_DIST",
+        str(Path(__file__).resolve().parents[2] / "frontend" / "dist"),
+    )
+
     ALLOWED_CAPTURE_EXTENSIONS = (".pcap", ".pcapng", ".cap")
 
     # Celery runs in a worker process; set CELERY_ALWAYS_EAGER to run inline.

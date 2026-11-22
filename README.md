@@ -33,56 +33,69 @@ engine (Phase 2), and the dashboard, explorer, comparison and reports (Phase 3).
 
 ## Quick start
 
-Requires Python >= 3.12, [uv](https://docs.astral.sh/uv/), PostgreSQL and Redis.
+Requires Python >= 3.12, [uv](https://docs.astral.sh/uv/), Node `^20.19` or `>=22.12`, PostgreSQL and Redis.
 
-Run everything from the repository root:
+Run everything from the repository root.
+
+**Production-style (Flask serves the built Vue app on one port):**
 
 ```bash
 uv sync
+npm --prefix frontend ci && npm --prefix frontend run build   # -> frontend/dist
 export NETSCOPE_DATABASE_URL=postgresql+psycopg://netscope:netscope@localhost:5432/netscope
 export NETSCOPE_REDIS_URL=redis://localhost:6379/0
-uv run flask --app backend/wsgi db upgrade                # create tables
-uv run flask --app backend/wsgi run                       # web app on :5000
-uv run celery --workdir backend -A wsgi:celery_app worker --loglevel=info   # in a second terminal
-uv run pytest                                             # tests (SQLite, no services needed)
+uv run flask --app backend/wsgi db upgrade                    # create tables
+uv run flask --app backend/wsgi run                           # app + API on http://localhost:5000
+uv run celery --workdir backend -A wsgi:celery_app worker --loglevel=info   # second terminal
 ```
+
+For a real deployment run Flask under a WSGI server (for example
+`uv run gunicorn --chdir backend wsgi:app`) behind HTTPS, with `NETSCOPE_ENV=production`.
+
+**Development (hot reload):**
+
+```bash
+uv run flask --app backend/wsgi run      # terminal 1: Flask API on :5000
+uv run celery --workdir backend -A wsgi:celery_app worker --loglevel=info   # terminal 2
+npm --prefix frontend ci                 # first time only
+npm --prefix frontend run dev            # terminal 3: Vue app on http://localhost:5173
+```
+
+**Tests:**
+
+```bash
+uv run pytest                            # backend tests (SQLite, no services needed); browser tests skip if unavailable
+npm --prefix frontend test               # frontend unit/component tests (Vitest)
+npm --prefix frontend run build && uv run pytest tests/e2e   # real-browser tests against the production build
+```
+
+The browser tests need Playwright's Chromium (`uv run playwright install chromium`) or an existing
+Chromium via `NETSCOPE_CHROMIUM_PATH`, and `frontend/dist` to be built; otherwise they are skipped.
 
 `.env.example` lists the supported environment variables. NetScope reads real environment
 variables only; it does not load `.env` files itself.
 
-Then open <http://localhost:5000>, register, and upload a capture.
+Then open <http://localhost:5000> (or `:5173` in development), register, and upload a capture.
 
-### Frontend assets
+### Frontend
 
-The pages are server-rendered shells that load data from the JSON API with vanilla JavaScript.
-There are no runtime CDN dependencies: Tailwind CSS is compiled ahead of time to
-`frontend/static/css/app.css` and Chart.js 4.4.7 (MIT) is vendored in `frontend/static/vendor/`. Both are
-committed, so running the app needs no Node. Rebuild the CSS only after changing templates or
-JS classes:
+The interface is a Vue 3 single-page application (Composition API, Vite, Vue Router, Pinia,
+Tailwind CSS 3, Chart.js 4, Axios) in `frontend/`. There are no runtime CDN dependencies.
 
-```bash
-npm --prefix frontend ci && npm --prefix frontend run build:css   # Tailwind 3.4.17 -> frontend/static/css/app.css
-```
-
-### Vue frontend (in development)
-
-A Vue 3 + Vite application is being built in `frontend/src` to replace the server-rendered pages
-one by one. For now it contains only the application shell and a placeholder dashboard; the
-existing Flask pages above remain the working interface. Requires Node `^20.19` or `>=22.12`.
-
-```bash
-npm --prefix frontend install       # first time only; commit the generated package-lock.json
-uv run flask --app backend/wsgi run # terminal 1: Flask on :5000
-npm --prefix frontend run dev       # terminal 2: Vite on http://localhost:5173
-npm --prefix frontend run build     # production build -> frontend/dist (Flask does not serve it yet)
-npm --prefix frontend run preview   # serve the production build locally on :4173
-```
-
-The browser only talks to Vite; it forwards `/api` to Flask (`VITE_DEV_PROXY_TARGET`, default
-`http://127.0.0.1:5000`), so requests are same-origin and Flask needs no CORS. Session cookies and
-CSRF protection work as they do for the existing pages: the API client sends `X-CSRFToken` on
-state-changing requests. To see signed-in state in the dev app, sign in at
-`http://localhost:5000/login` first (cookies are shared across ports on `localhost`).
+- **Production:** `npm --prefix frontend run build` writes `frontend/dist`. Flask serves it
+  (`backend/app/web/spa.py`): real files under `/assets` are cached for a year (they are
+  fingerprinted), and every other non-`/api` path returns `index.html` so client-side routes work on
+  reload. Set `NETSCOPE_FRONTEND_DIST` to serve a build from elsewhere. If the build is missing,
+  Flask answers 503 with the build command. `npm --prefix frontend run preview` serves the build on
+  `:4173` with the same `/api` proxy.
+- **Development:** the Vite dev server proxies `/api` to Flask (`VITE_DEV_PROXY_TARGET`, default
+  `http://127.0.0.1:5000`). The browser only talks to Vite, so requests are same-origin; session
+  cookies and CSRF work exactly as in production and Flask needs no CORS settings.
+- **Authentication:** the Flask session cookie (HttpOnly, SameSite=Lax) is the only credential.
+  The app keeps nothing in `localStorage`/`sessionStorage`; on load it asks `GET /api/v1/auth/me`.
+  The Axios client fetches a CSRF token from `GET /api/v1/auth/csrf`, sends it as `X-CSRFToken` on
+  state-changing requests, refreshes it once if rejected, and drops it after login/logout. A 401
+  anywhere sends the user to the sign-in page and back afterwards.
 
 ### Configuration (environment variables)
 
@@ -96,6 +109,7 @@ state-changing requests. To see signed-in state in the dev app, sign in at
 | `NETSCOPE_MAX_UPLOAD_BYTES` | 200 MB | Upload size limit |
 | `NETSCOPE_MAX_PACKETS` | 2,000,000 | Per-capture packet limit for analysis |
 | `NETSCOPE_PACKET_BATCH_SIZE` | 5000 | Packets written to the database per batch |
+| `NETSCOPE_FRONTEND_DIST` | `frontend/dist` | Built Vue app that Flask serves |
 
 Production sets `SESSION_COOKIE_SECURE`, so serve it over HTTPS.
 
@@ -124,17 +138,24 @@ backend/
       capture_service.py  upload, ownership-scoped queries, job submission, delete
       auth_service.py     registration and authentication
     api/               JSON API under /api/v1 (health, auth, captures, analysis, dashboard, reports)
-    web/               login/register and the page views
+    web/               serves the built Vue app (index.html fallback, caching, CSP)
     workers/tasks.py   Celery tasks
   migrations/        Alembic migrations
   tests/             unit and API tests (pytest)
 frontend/
-  templates/         login/register and the page shells (dashboard, captures, capture, compare)
-  static/js/         ns.js (shared client library) + one script per page
-  static/css, vendor compiled Tailwind CSS, vendored Chart.js
-  index.html, vite.config.js, package.json   Vue 3 + Vite application (see above)
-  src/               api/ (Axios client), router/, stores/ (Pinia), layouts/, views/, components/, composables/
-tests/e2e/           real-browser end-to-end tests (Playwright)
+  index.html, vite.config.js, package.json, tailwind.config.js
+  src/
+    api/             Axios client (CSRF, error handling) and one module per API area
+    router/          routes, auth guards, safe post-login redirect
+    stores/          Pinia: auth, captures, dashboard, captureDetail
+    composables/     polling, async state, URL-backed filters, upload, downloads, comparison
+    layouts/         AppLayout (sidebar + top bar), AuthLayout
+    views/           Login, Register, Dashboard, Captures, CaptureDetail (+ Overview, Protocols,
+                     Flows, Packets, Performance tabs), Compare
+    components/      common/, dashboard/, captures/, packets/, flows/, charts/
+    utils/           formatting, chart configuration, safe redirects
+  tests/             Vitest unit and component tests
+tests/e2e/           real-browser end-to-end tests (Playwright) against the production build
 ```
 
 Uploaded files are stored on disk at `<UPLOAD_FOLDER>/<user_id>/<capture_id>.<format>`,
@@ -145,23 +166,27 @@ filename is used only for display.
 
 | Page | Purpose |
 | --- | --- |
+| `/login`, `/register` | Sign in / create an account; returns you to the page you were trying to reach |
 | `/dashboard` | Totals, processing status, recent sessions, traffic and protocol charts. Refreshes itself while jobs run |
 | `/captures` | Drag-and-drop upload with progress, capture history, status filter, retry and delete |
-| `/captures/<id>` | Processing progress, then tabs: Overview, Protocols, Flows, Packets (explorer), Performance; report downloads |
+| `/captures/<id>` | Processing progress, then tabs (each its own route: `/protocols`, `/flows`, `/packets`, `/performance`); report downloads. Filters and paging live in the URL, so views can be bookmarked and Back works |
 | `/compare` | Pick two completed captures; shareable link via `?a=&b=` |
 
 ### Security notes
 
-- Pages render all capture-derived text with `textContent`, never `innerHTML`, so hostile
-  filenames or packet contents cannot inject markup. Templates are auto-escaped, and PDF text
-  is XML-escaped.
+- The Vue app renders all capture-derived text through text interpolation and never uses `v-html`,
+  so hostile filenames or packet contents cannot inject markup (covered by unit and browser tests).
+  The app shell is served with a Content-Security-Policy (`script-src 'self'`, no inline script, no
+  framing). PDF text is XML-escaped.
+- The app shell is public and contains no user data; access control is enforced by the API on every
+  request (401 when signed out, 404 for another user's capture). Router guards are only a convenience.
 - CSV cells that could be read as spreadsheet formulas (`=`, `+`, `-`, `@`, tab, CR) are
   prefixed with an apostrophe. Reports are generated on demand, sent with `Cache-Control:
   no-store`, and never written to disk.
 
 - Passwords are hashed with Werkzeug (scrypt); login responses do not reveal whether an email exists.
 - Sessions use HttpOnly, SameSite=Lax cookies. All state-changing requests need a CSRF token:
-  forms include it; JSON clients fetch it from `GET /api/v1/auth/csrf` and send `X-CSRFToken`.
+  the Vue client (and any other JSON client) fetches it from `GET /api/v1/auth/csrf` and send `X-CSRFToken`.
 - Every capture query is filtered by owner. Another user's capture returns 404.
 - Uploads are validated by content (not extension), streamed to disk with a size limit,
   and error messages never include server paths.

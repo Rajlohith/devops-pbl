@@ -1,23 +1,15 @@
 """NetScope application factory."""
 
-from pathlib import Path
-
 from flask import Flask
 
 from app.config import Config, get_config
 
-# Server-rendered templates and static assets live in the repository's frontend/ directory.
-FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
-
 
 def create_app(config: str | type[Config] | None = None) -> Flask:
     """Create and configure the Flask application."""
-    app = Flask(
-        __name__,
-        instance_relative_config=True,
-        template_folder=str(FRONTEND_DIR / "templates"),
-        static_folder=str(FRONTEND_DIR / "static"),
-    )
+    # No Flask static folder or templates: the interface is the Vue single-page app, which
+    # app.web serves from FRONTEND_DIST_DIR. Flask itself only renders JSON and files.
+    app = Flask(__name__, instance_relative_config=True, static_folder=None)
 
     config_class = config if isinstance(config, type) else get_config(config)
     app.config.from_object(config_class)

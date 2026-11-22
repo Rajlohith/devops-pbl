@@ -6,16 +6,16 @@ import { useAuthStore } from '@/stores/auth'
 
 import App from './App.vue'
 import './assets/main.css'
-import router from './router'
+import { createAppRouter, redirectOnUnauthorized } from './router'
 
 const app = createApp(App)
 const pinia = createPinia()
+const router = createAppRouter()
+
 app.use(pinia)
 app.use(router)
 
-// Any 401 from the API means the session is gone; keep the auth store in step with it.
-const auth = useAuthStore(pinia)
-setUnauthorizedHandler(() => auth.clear())
-auth.loadUser()
+// Any 401 for a signed-in user means the session is gone: clear state and go to sign-in.
+setUnauthorizedHandler(redirectOnUnauthorized(router, useAuthStore(pinia)))
 
 app.mount('#app')
