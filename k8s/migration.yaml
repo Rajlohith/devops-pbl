@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: netscope-migration
+  namespace: netscope
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: netscope-migration
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netscope-secrets
+                  key: POSTGRES_PASSWORD
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U netscope -d netscope; do
+                echo "Waiting for PostgreSQL..."
+                sleep 3
+              done
+      containers:
+        - name: migrate
+          image: netscope:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - flask
+            - --app
+            - wsgi
+            - db
+            - upgrade
+          envFrom:
+            - configMapRef:
+                name: netscope-config
+          env:
+            - name: NETSCOPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: netscope-secrets
+                  key: NETSCOPE_SECRET_KEY
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netscope-secrets
+                  key: POSTGRES_PASSWORD
+            - name: NETSCOPE_DATABASE_URL
+              value: "postgresql+psycopg://netscope:$(POSTGRES_PASSWORD)@postgres:5432/netscope"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

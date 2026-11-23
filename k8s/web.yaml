@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: netscope-web
+  namespace: netscope
+spec:
+  type: ClusterIP
+  selector:
+    app: netscope-web
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netscope-web
+  namespace: netscope
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: netscope-web
+  template:
+    metadata:
+      labels:
+        app: netscope-web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netscope-secrets
+                  key: POSTGRES_PASSWORD
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U netscope -d netscope; do
+                echo "Waiting for PostgreSQL..."
+                sleep 3
+              done
+        - name: wait-for-valkey
+          image: valkey/valkey:8-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until valkey-cli -h valkey -p 6379 ping | grep -q PONG; do
+                echo "Waiting for Valkey..."
+                sleep 3
+              done
+      containers:
+        - name: web
+          image: netscope:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - gunicorn
+            - --bind
+            - 0.0.0.0:8000
+            - wsgi:app
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: netscope-config
+          env:
+            - name: NETSCOPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: netscope-secrets
+                  key: NETSCOPE_SECRET_KEY
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netscope-secrets
+                  key: POSTGRES_PASSWORD
+            - name: NETSCOPE_DATABASE_URL
+              value: "postgresql+psycopg://netscope:$(POSTGRES_PASSWORD)@postgres:5432/netscope"
+          volumeMounts:
+            - name: uploads
+              mountPath: /data/uploads
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: uploads-pvc
