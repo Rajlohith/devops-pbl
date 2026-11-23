@@ -1,0 +1,74 @@
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: netscope
+      POSTGRES_USER: netscope
+      POSTGRES_PASSWORD: netscope
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Redis-compatible message broker
+  redis:
+    image: valkey/valkey:8-alpine
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Apply database migrations before starting the application
+  migrate:
+    image: netscope:local
+    env_file:
+      - .env
+    command: ["flask", "--app", "wsgi", "db", "upgrade"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # Flask application served by Gunicorn
+  web:
+    image: netscope:local
+    env_file:
+      - .env
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi:app"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Background PCAP processing worker
+  worker:
+    image: netscope:local
+    env_file:
+      - .env
+    command: ["celery", "-A", "wsgi:celery_app", "worker", "--loglevel=info"]
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  uploads:

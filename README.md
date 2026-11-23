@@ -1,826 +1,1077 @@
 # NetScope
 
-![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
-![Flask](https://img.shields.io/badge/Flask-3.1+-000000?logo=flask&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)
-![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
-![Celery](https://img.shields.io/badge/Celery-5.4+-37814A?logo=celery&logoColor=white)
-![Scapy](https://img.shields.io/badge/Packet_Analysis-Scapy-informational)
-![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
+![Celery](https://img.shields.io/badge/Celery-5.4-37814A?logo=celery&logoColor=white)
+![Scapy](https://img.shields.io/badge/Scapy-2.8-1F6FEB)
+![License](https://img.shields.io/badge/License-Apache_2.0-blue)
 
-> A multi-user network traffic analysis platform: upload PCAP/PCAPNG captures, process them in the background with Scapy, and explore packets, flows, protocol and performance metrics, and explainable network-intelligence analytics through a Vue web interface.
+**A multi-user web platform for analysing uploaded packet captures: Scapy-based dissection, bidirectional flow reconstruction, traffic analytics, and rule-based network intelligence, delivered through a Flask API and a Vue 3 interface.**
 
-NetScope analyses **capture files that users upload**. It does not sniff live traffic. A user registers, uploads a `.pcap`, `.pcapng` or `.cap` file, and a Celery worker streams it through a single-pass analysis pipeline. Packets, flows, summary statistics and advanced analytics are persisted in PostgreSQL, and the Vue interface renders them as dashboards, tables, charts and downloadable PDF/CSV reports.
+NetScope analyses **capture files that users upload** (PCAP and PCAPNG). It does not sniff live interfaces.
 
-Packet-capture analysis has an inherent limit: a capture taken at one point shows only what passed that point. A missing SYN-ACK, a sequence gap or a repeated ACK is *evidence* worth investigating, not proof of network loss or an attack. NetScope is built around that distinction. Wherever a result is inferred rather than observed, the API labels it as such, ships the metric definition alongside the numbers, and refuses to invent figures (for example, it never reports a packet-loss percentage).
+---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Key Features](#key-features)
-  - [Authentication and User Isolation](#authentication-and-user-isolation)
-  - [Capture Management](#capture-management)
-  - [Packet Analysis](#packet-analysis)
-  - [Flow Analysis](#flow-analysis)
-  - [Traditional Analytics](#traditional-analytics)
-  - [Advanced Network Intelligence](#advanced-network-intelligence)
+- [Capabilities](#capabilities)
+  - [Authentication and user isolation](#authentication-and-user-isolation)
+  - [Capture management](#capture-management)
+  - [Packet analysis](#packet-analysis)
+  - [Flow analysis](#flow-analysis)
+  - [Traditional analytics](#traditional-analytics)
+  - [Advanced Network Intelligence (Phase 4)](#advanced-network-intelligence-phase-4)
   - [Frontend](#frontend)
   - [Reporting](#reporting)
 - [Technology Stack](#technology-stack)
-- [System Architecture](#system-architecture)
-  - [Capture Processing Workflow](#capture-processing-workflow)
-  - [Analysis Architecture](#analysis-architecture)
-  - [Capture Lifecycle and Job Semantics](#capture-lifecycle-and-job-semantics)
-- [Observed Versus Inferred: How to Read the Results](#observed-versus-inferred-how-to-read-the-results)
-- [Metric Definitions](#metric-definitions)
-  - [Traditional Metrics](#traditional-metrics)
-  - [Network Intelligence Metrics](#network-intelligence-metrics)
-  - [Anomaly Rules](#anomaly-rules)
-- [Frontend Application](#frontend-application)
+- [Architecture](#architecture)
+  - [System architecture](#system-architecture)
+  - [Capture processing workflow](#capture-processing-workflow)
+  - [Analysis architecture](#analysis-architecture)
+  - [Design decisions](#design-decisions)
+  - [Data model](#data-model)
 - [Repository Structure](#repository-structure)
 - [Installation and Local Development](#installation-and-local-development)
+- [Docker Deployment](#docker-deployment)
+  - [Why Docker](#why-docker)
+  - [Image build architecture](#image-build-architecture)
+  - [Docker Compose service architecture](#docker-compose-service-architecture)
   - [Prerequisites](#prerequisites)
-  - [1. Clone and Install Dependencies](#1-clone-and-install-dependencies)
-  - [2. Start PostgreSQL and Valkey](#2-start-postgresql-and-valkey)
-  - [3. Create the Database](#3-create-the-database)
-  - [4. Configure Environment Variables](#4-configure-environment-variables)
-  - [5. Apply Migrations and Build the Frontend](#5-apply-migrations-and-build-the-frontend)
-  - [6. Run the Application](#6-run-the-application)
-  - [Optional: Vite Development Workflow](#optional-vite-development-workflow)
+  - [Configure the environment](#configure-the-environment)
+  - [Build the image](#build-the-image)
+  - [Start the application](#start-the-application)
+  - [Inspect the services](#inspect-the-services)
+  - [Access the application](#access-the-application)
+  - [Stop the services](#stop-the-services)
+  - [Persistent data](#persistent-data)
+  - [Troubleshooting](#troubleshooting)
 - [Configuration Reference](#configuration-reference)
 - [API Reference](#api-reference)
-  - [Conventions](#conventions)
-  - [Health and Authentication](#health-and-authentication)
-  - [Captures](#captures)
-  - [Summary and Analytics](#summary-and-analytics)
-  - [Packets](#packets)
-  - [Flows](#flows)
-  - [Advanced Network Intelligence Endpoints](#advanced-network-intelligence-endpoints)
-  - [Dashboard and Comparison](#dashboard-and-comparison)
-  - [Reports and Exports](#reports-and-exports)
 - [Testing and Validation](#testing-and-validation)
-- [Security Notes](#security-notes)
 - [Operational Notes](#operational-notes)
 - [Limitations and Interpretation Notes](#limitations-and-interpretation-notes)
 - [Contributing](#contributing)
 - [License](#license)
 
+---
+
 ## Overview
 
-Analysing a capture is a pipeline with several distinct responsibilities, and NetScope keeps them separate:
+A packet capture is a flat, time-ordered record of frames. Answering practical questions from one ("Which conversations dominate the traffic?", "Do connections complete their handshakes?", "Are DNS lookups slow or failing?", "Is this TCP session showing signs of loss?") means decoding every frame, grouping frames into conversations, and aggregating the result, usually by hand in a desktop tool and without a shared, queryable record of the outcome.
 
-| Concern | What happens | Where |
-| --- | --- | --- |
-| **Ingestion and validation** | The upload is streamed to disk with a size limit, its format is detected from file signatures (not the extension), and its record framing is checked without loading packet bodies. | `capture_storage.py`, `capture_reader.py` |
-| **Background processing** | An authenticated request creates a database record and enqueues a Celery task; a worker claims the capture and runs the analysis outside the web process. | `capture_service.py`, `workers/tasks.py` |
-| **Packet and flow persistence** | Packets are decoded one at a time and inserted in batches; flows are reconstructed bidirectionally and written once the pass ends. | `packet_extractor.py`, `flow_tracker.py`, `analysis_pipeline.py` |
-| **Traditional analytics** | Protocol distribution, throughput, packet-size statistics, time series, retransmissions, handshake RTT, jitter. | `traffic_stats.py` |
-| **Advanced network intelligence** | TCP connection outcomes, DNS transactions, resets, top talkers, direction, loss indicators, window analysis, rule-based anomalies. | `services/analytics/` |
-| **Visualisation and reporting** | A Vue single-page application renders results; the API generates PDF and CSV reports on demand. | `frontend/`, `export_service.py` |
+NetScope turns that into a repeatable, multi-user workflow. An authenticated user uploads a capture, a background worker analyses it once, and every result is persisted in PostgreSQL so that packets, flows, charts, reports and comparisons are served from the database rather than recomputed on demand.
 
-Two design decisions shape the whole system:
+The platform deliberately separates six concerns:
 
-- **One pass over the capture.** The traditional statistics and all advanced analytics consume the same decoded packet stream. The advanced analyzers reuse the flow ids and retransmission flags already produced by the flow tracker instead of re-deriving them, so the two layers cannot disagree about what a flow or a retransmission is.
-- **All-or-nothing results.** Packets are inserted in batches while the capture is processed, but a capture only becomes `completed` after flows, summary and advanced analytics are written. If anything fails, everything stored for that capture is deleted, so a partial analysis is never served.
+| Concern | What it is | Where it lives |
+|---|---|---|
+| **Capture ingestion and validation** | Streaming the upload to disk with a size limit, checking the file by content (magic bytes and record framing), storing it under a server-chosen path, recording a database row. | `services/capture_storage.py`, `services/capture_reader.py`, `services/capture_service.py` |
+| **Background processing** | A Celery task that claims the capture, runs the analysis pipeline, and records `completed` or `failed`. | `workers/tasks.py`, `celery_app.py` |
+| **Packet and flow persistence** | Per-packet rows, bidirectional flow rows, and the aggregate summary document. | `orm/analysis.py`, `services/analysis_pipeline.py` |
+| **Traditional analytics** | Protocol distribution, throughput, packet sizes, time series, TCP retransmissions, handshake RTT, jitter, optional link utilisation. | `services/flow_tracker.py`, `services/traffic_stats.py` |
+| **Advanced network intelligence (Phase 4)** | TCP connection outcomes, DNS transactions, reset analysis, top talkers, direction classification, loss indicators, window analysis, rule-based anomaly findings. | `services/analytics/`, `orm/advanced.py` |
+| **Frontend visualisation and reporting** | A Vue 3 single-page application, plus on-demand CSV and PDF exports. | `frontend/`, `services/export_service.py` |
 
-## Key Features
+Phase 4 does not re-read the capture. Its trackers run in the **same single pass** as the flow tracker and statistics accumulator, reusing the flow identifiers and retransmission flags that pass already produced.
 
-### Authentication and User Isolation
+---
 
-- Registration, login, logout and a "current user" endpoint under `/api/v1/auth`. Passwords are 8 to 128 characters and hashed with Werkzeug.
-- Session authentication through an HttpOnly, SameSite=Lax cookie (Flask-Login). The Vue app keeps no credentials in `localStorage` or `sessionStorage`.
-- CSRF protection (Flask-WTF) on every state-changing request. Clients fetch a token from `GET /api/v1/auth/csrf` and send it in the `X-CSRFToken` header.
-- Every capture lookup is filtered by owner. Another user's capture is indistinguishable from a missing one: the API answers `404`.
-- Login responses do not reveal whether an email exists, and a dummy password hash is checked for unknown emails so response timing does not leak account existence.
+## Capabilities
 
-### Capture Management
+### Authentication and user isolation
 
-- Upload of `.pcap`, `.pcapng` and `.cap` files, validated by content, streamed to disk with a configurable size limit (default 200 MB) and a SHA-256 digest recorded.
-- Files are stored at `<upload folder>/<user id>/<capture id>.<format>`. The client's filename is used for display only and never forms part of a path.
-- Capture list (paginated, filterable by status) and detail views with live processing progress.
-- Status lifecycle `uploaded → pending → processing → completed | failed`. A failed capture keeps a user-visible error message and can be retried.
-- Deletion removes the stored file and the database record, together with every dependent row.
-- Background processing through Celery. The worker only processes `pending` captures, so duplicate message deliveries are harmless.
+- **Registration and sign-in** with email and password (`POST /api/v1/auth/register`, `/login`, `/logout`; `GET /me`). Emails are normalised to lower case; passwords must be 8 to 128 characters and are hashed with Werkzeug's `generate_password_hash`. Login failures return one generic message, and the unknown-email path spends comparable time so response timing does not reveal which emails exist.
+- **Session authentication** with Flask-Login. The session cookie is `HttpOnly` and `SameSite=Lax`; it is `Secure` in production. The session is cleared on login, registration and logout.
+- **CSRF protection** with Flask-WTF. Every state-changing request needs an `X-CSRFToken` header whose value comes from `GET /api/v1/auth/csrf`. The bundled Vue client fetches, attaches, refreshes (once, on rejection) and resets the token automatically.
+- **Per-user data isolation.** Every capture lookup filters on the owning user. Another user's capture is indistinguishable from a missing one: the API returns `404`, never `403`. All packet, flow, analytics, export and comparison routes go through the same ownership check.
+- **Browser-side hardening.** The app shell is served with a Content-Security-Policy (`script-src 'self'`, no framing, `object-src 'none'`) and `X-Content-Type-Options` / `X-Frame-Options` headers. The Vue app renders capture-derived text through interpolation and does not use `v-html`.
 
-### Packet Analysis
+### Capture management
 
-Implemented in `packet_extractor.py` with Scapy, plus signature-based identification in `protocol_detector.py`.
+- **Upload** of `.pcap`, `.pcapng` and `.cap` filenames (`POST /api/v1/captures`, multipart field `file`). The extension is only a first filter: the content must be a valid classic PCAP or PCAPNG file, and the stored format is determined from the content.
+- **Validation by content.** The reader recognises PCAP (both byte orders, microsecond and nanosecond variants) and PCAPNG signatures, then walks record or block framing with seeks, without loading packet bodies, rejecting truncated files, impossible lengths and (for PCAP) captured lengths above the original or snapshot length.
+- **Secure storage.** The upload is streamed in 1 MiB chunks to a temporary file inside the owner's directory, checked against the size limit while streaming (`413` when exceeded), hashed (SHA-256), validated, then moved into place as `<UPLOAD_FOLDER>/<user_id>/<capture_id>.<pcap|pcapng>`. The client's filename never takes part in the path; it is sanitised and kept for display only. Error messages shown to users have server paths removed.
+- **Listing and detail.** Paginated listing (`per_page` up to 100) with a `status` filter, per-capture detail, and a lightweight status endpoint that reports live progress (`packet_count` grows as packet batches are stored).
+- **Lifecycle:** `uploaded → pending → processing → completed | failed`.
+- **Retry.** Analysis can be queued from `uploaded` or `failed` (`POST /captures/<id>/analyze`); any other state returns `409`. If the broker is unreachable the capture is recorded as `failed` with an explanatory message and the endpoint answers `503`, so the user can retry. Uploading with `analyze=false` stores the file without queueing analysis.
+- **Deletion** removes the stored file first, then the database row; packets, flows and analytics are removed by `ON DELETE CASCADE`.
+- **Background processing.** Analysis runs in a Celery worker. The task atomically claims a capture only if it is `pending`, so duplicate or redelivered messages are harmless. On any failure the capture's partial results are deleted and the user-visible `error_message` is set, so half-finished results are never served.
 
-- **Layer 2:** Ethernet (source/destination MAC, EtherType) and the 802.1Q VLAN identifier.
-- **Layer 3:** IPv4 and IPv6, including TTL/hop limit. IPv6 extension headers (hop-by-hop, routing, fragment, destination options) are skipped to find the real upper-layer protocol, and later fragments without a transport header are treated as expected rather than malformed.
-- **Layer 4:** TCP (flags, sequence/acknowledgement numbers, advertised window, window-scale option), UDP, ICMP and ICMPv6, plus ARP.
-- **Application layer:** DNS over UDP and over TCP (when the complete message is in one TCP segment), HTTP identified from a request or status line in a TCP payload, and a wider set of protocols named by payload signature or, failing that, well-known port when a payload is present (TLS with SNI, SSH, SMB, QUIC, DHCP, NTP, and others; see [`docs/phase4-network-intelligence.md`](docs/phase4-network-intelligence.md#application-protocol-identification)). Every packet records whether its application label came from a `signature` or a `port`.
-- **Malformed packets are stored, not dropped,** with a reason (`truncated_ip_header`, `truncated_transport_header`, `unparsed_frame` or `extraction_error:<type>`), so packet counts stay accurate. A decoding failure in one packet never aborts the capture.
-- Byte counts use the on-the-wire frame size (`original_length`), so they remain correct for captures cut short by a snap length.
+### Packet analysis
 
-### Flow Analysis
+`services/packet_extractor.py` converts each Scapy packet into a structured record (the `Packet` Pydantic model plus analysis-only fields).
 
-- Bidirectional flows keyed by protocol and the two address/port pairs; endpoint A is the side that sent the flow's first packet. ICMP flows are keyed by address pair, and non-IP packets belong to no flow.
-- Per-flow packet and byte totals in each direction, first/last seen, duration, retransmission count, handshake RTT and jitter.
-- Top flows (the default flow sort is by bytes), plus filtering and sorting by protocol, application, address, port, bytes, packets, duration and start time.
-- Packet-level and flow-level inspection: any packet can be opened with every extracted field, and the packet list can be narrowed to one flow.
+| Layer | Support |
+|---|---|
+| Ethernet | Source and destination MAC, EtherType. |
+| VLAN | 802.1Q: the VLAN ID of the tag Scapy exposes is recorded. |
+| IPv4 | Addresses, TTL, protocol. |
+| IPv6 | Addresses, hop limit; **extension headers** (hop-by-hop, routing, fragment, destination options) are skipped to find the real next header. Later IPv6 fragments, which carry no transport header, are treated as expected rather than malformed. |
+| TCP | Ports, flags, sequence and acknowledgement numbers, advertised window, window-scale option, payload length (taken from the IP header, so snaplen-truncated captures stay correct). |
+| UDP | Ports and length. |
+| ICMP / ICMPv6 | Type and code. |
+| ARP | Labelled as ARP; belongs to no flow. |
+| DNS | Dissected by Scapy over UDP and TCP; header fields, up to 8 questions, and the response code are captured for transaction matching. |
+| HTTP | Identified from a request or status line at the start of a TCP payload (method prefixes and `HTTP/1.`). |
+| Other application protocols | `services/protocol_detector.py` labels common protocols from payload signatures (for example TLS, SSH, SMB, QUIC, DHCP, NTP) and, where a payload is present, from well-known ports. Each packet's metadata records whether the label came from a `signature` or a `port`. Bare handshake and ACK packets are left unlabelled rather than guessed. |
 
-### Traditional Analytics
+**Malformed packets are kept, not dropped.** A packet that cannot be fully decoded is stored with a `malformed_reason` (`truncated_ip_header`, `truncated_transport_header`, `unparsed_frame`, or `extraction_error:<type>`), so packet counts stay faithful to the capture and malformed packets can be filtered in the explorer.
 
-Computed by `traffic_stats.py` and stored as a summary document per capture.
+### Flow analysis
 
-- Protocol distribution at the transport layer and the application layer.
-- Average and peak throughput and packets per second.
-- Packet-size statistics.
-- Traffic-over-time series.
-- TCP retransmission counts (a lower bound; see [Metric Definitions](#traditional-metrics)).
-- Handshake RTT and arrival-time jitter, where the capture contains what is needed to compute them.
-- Link utilisation, computed on request only when the caller supplies a link speed (`link_mbps`), because a capture does not record one.
+- **Bidirectional flow identification.** A flow is the 5-tuple (protocol, address, port, address, port) treated symmetrically. Endpoint A is the side that sent the flow's first packet. ICMP flows are keyed by address pair; non-IP packets belong to no flow.
+- **Per-flow statistics:** packets and bytes in total and per direction, first and last seen, duration, application protocol, retransmission count, handshake RTT and jitter.
+- **Top flows** are the default ordering of the flow list (by bytes, descending); flows can also be sorted by packets, duration or start time.
+- **Packet-level and flow-level inspection.** Packets can be listed with filters and opened individually with every extracted field; each packet carries its `flow_id`, so a packet can be traced to its flow and back.
 
-### Advanced Network Intelligence
+### Traditional analytics
 
-Ten analytics added in "Phase 4" and documented in [`docs/phase4-network-intelligence.md`](docs/phase4-network-intelligence.md). They are computed in the same pass as the traditional metrics by the modules in `backend/app/services/analytics/`.
+All values below are computed during analysis and stored; the API reads them back.
 
-| Capability | Module | What it reports |
-| --- | --- | --- |
-| TCP connection outcomes and success rate | `tcp_connections.py` | Per-connection state: `established`, `incomplete`, `refused` or `unclassified`, and a success rate over observable attempts. |
-| Incomplete versus refused | `tcp_connections.py` | A SYN with no completed handshake is `incomplete` (not a confirmed failure). Only a SYN answered by RST-ACK is `refused`. |
-| Handshake timing and observed duration | `tcp_connections.py` | SYN to SYN-ACK, SYN to completing ACK, and first-to-last captured packet, with histograms. Connections lacking a captured start or end are flagged `capture_truncated`. |
-| TCP reset analysis | `tcp_connections.py` | Reset packet rate, reset connection rate, and reset evidence per connection. |
-| DNS response latency | `dns_analytics.py` | Query-to-response time for matched transactions. |
-| DNS failure analysis | `dns_analytics.py` | Response-code breakdown, error and server-failure rates, and unanswered queries classified as inferred timeout or indeterminate. |
-| Top talkers | `traffic_intel.py` | Addresses ranked by bytes or packets, as source, destination or both; IPv4 and IPv6. |
-| Direction classification | `traffic_intel.py` | Inbound, outbound, internal or unknown, relative to local networks you configure. |
-| Packet-loss indicators | `tcp_diagnostics.py` | Retransmissions, duplicate ACKs, sequence gaps, out-of-order segments and partial overlaps, each with severity and confidence. |
-| Receive-window analysis | `tcp_diagnostics.py` | Advertised window, window changes, zero-window episodes, and window scaling when both handshake packets were captured. |
-| Anomaly detection | `anomalies.py` | Sixteen explainable threshold rules; every finding states the rule, the measured value against the threshold, the evidence and the supporting packets. |
+| Metric | Definition and caveats |
+|---|---|
+| **Protocol distribution** | Transport counts (TCP, UDP, ICMP, ICMPv6; non-IP traffic such as ARP is listed by name) and application counts (DNS, HTTP, plus protocols the detector recognises). Application packets also count towards their transport. |
+| **Bytes** | On-the-wire frame size (`original_length`), headers included. |
+| **Throughput and packets per second** | Average and peak, from the time series. |
+| **Packet-size statistics** | Distribution of frame sizes. |
+| **Time series** | Packets, bytes, packets/s and bits/s per bucket. The bucket width is the smallest of a set of candidate widths that yields at most 300 points. |
+| **TCP retransmissions** | A segment whose exact (sequence number, length) was already seen in the same direction; a window of 1024 segments per direction is remembered. Re-segmented or coalesced retransmissions are not detected, so the count is a **lower bound**. Pure ACKs are never counted. |
+| **Handshake RTT** | First SYN to its SYN-ACK as seen **at the capture point**; only flows whose handshake was captured have one. |
+| **Jitter** | Mean absolute change between consecutive packet inter-arrival gaps within a flow. It is arrival-time jitter, not RFC 3550 transit-time jitter, because a capture has no send timestamps. Needs at least 3 packets. |
+| **Link utilisation** | A capture does not contain link speed, so utilisation is computed only when a link capacity is supplied (`link_mbps` query parameter; the Performance page has an input for it). |
 
-Observed facts and inferences are kept apart. See [Observed Versus Inferred](#observed-versus-inferred-how-to-read-the-results).
+### Advanced Network Intelligence (Phase 4)
+
+Phase 4 adds ten analytics, implemented as pure-Python trackers in `backend/app/services/analytics/` and persisted by migration `a4f1c2d9b7e3`. Every result ships with its own **definitions** and **limitations**, which the API returns and the interface displays next to the numbers.
+
+#### Observed versus inferred
+
+A single capture shows packets at one point on the path. NetScope is explicit about which values are read directly from packets and which are conclusions drawn from them.
+
+| Observed directly | Inferred (and therefore qualified) |
+|---|---|
+| SYN, SYN-ACK, ACK, FIN and RST packets and their timestamps | That a connection "failed" (only a *refused* connection, SYN answered by RST-ACK, is a confirmed failure; an *incomplete* one is not) |
+| DNS query and response packets, response codes | That a query "timed out" (inferred, and only if the capture ran on long enough) |
+| Sequence and acknowledgement numbers, advertised windows | That "loss occurred" (retransmissions, duplicate ACKs and sequence gaps are *indicators*, never a measurement) |
+| Source and destination addresses and byte counts | Direction (inbound or outbound), which depends on the local networks you configure |
+| Counts of packets matching a rule's condition | That traffic is "malicious" (findings are heuristics) |
+
+#### TCP connection outcomes and success rate
+
+Connections are tracked per flow; a flow may contain several connections when a port pair is reused (a new SYN with a different initial sequence number starts a new connection record). Each connection is classified only from what was captured:
+
+| State | Meaning |
+|---|---|
+| `established` | SYN, matching SYN-ACK (ack = client ISN + 1) and the client's completing ACK were all seen. |
+| `refused` | SYN followed by an RST-ACK from the server acknowledging the SYN, before any SYN-ACK. The only *confirmed* failure a passive capture can show. |
+| `incomplete` | SYN seen, handshake not completed in the capture (`no_synack` or `no_final_ack`). **Not** a confirmed failure: packets may have been filtered, answered on a path the capture did not see, or the capture may have ended. |
+| `unclassified` | No initial SYN was captured (capture started mid-connection), so the connection is not judged. |
+
+**Connection success rate** = `established / (established + incomplete + refused)`. The denominator is *observable attempts*, connections whose initial SYN was captured; `unclassified` connections are excluded. The rate is `null` when there are no observable attempts.
+
+#### TCP handshake timing and observed duration
+
+- **Handshake time**: first SYN to the completing client ACK, established connections only. It starts at the *first* SYN, so it includes SYN retransmission delay. (`syn_to_synack_ms` is the shorter SYN-to-SYN-ACK interval, the handshake RTT at the capture point.)
+- **Observed lifetime**: first to last captured packet of the connection. It is not the true lifetime when the capture starts or ends mid-connection.
+- **Termination**: `reset`, `fin` (FIN from both sides), `half_closed` (FIN from one side) or `none`. Connections whose start or end is not visible are flagged `capture_truncated`.
+- Timings are reported as distributions (including median and p95) and histograms.
+
+#### DNS response latency, failures and timeouts
+
+A DNS *transaction* is a query (possibly retransmitted) and its response, matched on client address and port, server address and port, DNS transaction ID **and transport**. A UDP query is never matched to a TCP response.
+
+- **Latency** is the first query transmission to the response (what the client waited); a second figure measures from the last retransmission (server and path time).
+- Retransmitted queries and duplicate responses are not double counted; unmatched queries and unmatched responses are separate counters. A message with several questions is one transaction.
+- **Failure rate** = responses with RCODE other than NOERROR ÷ responses observed. NXDOMAIN counts as an error response; a separate `server_failure_rate` excludes it (FORMERR, SERVFAIL, REFUSED and so on). Unanswered queries are never part of these rates.
+- **Inferred timeouts.** An unanswered query is an `unanswered_inferred_timeout` only if the capture continued at least `NETSCOPE_DNS_TIMEOUT_SECONDS` (default 5) after its last transmission; otherwise it is `unanswered_indeterminate`, because the response might simply fall after the capture ended. Even an inferred timeout remains an inference: the response may have bypassed the capture point.
+- DNS over TCP is recognised only when the whole message is in one TCP segment.
+
+#### TCP reset analysis
+
+Two distinct rates are reported: the **packet rate** (RST packets ÷ TCP packets) and the **connection rate** (connections with at least one RST ÷ tracked TCP connections). Resets are attributed to the sending host, with a capped set of evidence packets.
+
+#### Top talkers
+
+Addresses ranked by bytes or packets **sent**, **received**, or **both**, for IPv4 and IPv6 (optionally filtered to one IP version). Percentages use total IP bytes or packets as the denominator, so bidirectional shares across addresses sum to roughly 200 %, because each packet has two endpoints.
+
+#### Inbound, outbound, internal and unknown traffic
+
+Direction is relative to the **local networks you configure** (`?local=10.0.0.0/24,2001:db8::/32`, up to 64 entries; a bare address is treated as a host):
+
+| Source | Destination | Class |
+|---|---|---|
+| local | local | `internal` |
+| local | remote | `outbound` |
+| remote | local | `inbound` |
+| remote | remote | `unknown` (transit, mirror or third-party traffic) |
+
+Private address ranges are **not** assumed to be local. With no local networks configured, everything is `unknown`. IPv4-mapped IPv6 addresses are matched against IPv4 networks.
+
+#### Packet-loss indicators
+
+Five kinds of per-connection, per-direction evidence, each with a severity and confidence:
+
+| Indicator | What was observed |
+|---|---|
+| `retransmission` | An exact duplicate segment (counted once, by the flow tracker). |
+| `duplicate_ack` | A pure ACK repeating the previous ACK number and window while the peer had data in flight (RFC 5681 sense). |
+| `sequence_gap` | A segment ahead of the next expected sequence number, leaving a byte range not seen. |
+| `out_of_order` | A non-duplicate segment arriving behind the highest sequence seen, inside an earlier gap. |
+| `partial_overlap` | A segment overlapping already-seen data without being an exact duplicate (typically a re-segmented retransmission). |
+
+These are indicators commonly associated with loss or reordering. **NetScope reports no loss percentage** (`packet_loss_percent` is `null`): a sequence gap cannot distinguish network loss from capture-tool loss or reordering.
+
+#### TCP receive-window analysis
+
+Per connection and direction: the raw advertised window, window changes, **zero-window episodes**, and window scaling. A raw value is multiplied by 2^shift only when both the SYN and SYN-ACK were captured and both carried the window-scale option; otherwise effective window sizes are `null`, never guessed. Keep-alive and zero-window probes are ignored by the sequence tracking.
+
+#### Rule-based protocol anomaly detection
+
+Sixteen explainable threshold rules run over measures NetScope already computed. There is no machine learning and no external threat intelligence.
+
+| Area | Rules |
+|---|---|
+| Protocol and port | `http_on_nonstandard_port`, `non_dns_on_dns_port`, `udp_on_tcp_service_port` |
+| Volume and shape | `high_volume_host`, `traffic_burst`, `host_traffic_concentration`, `icmp_heavy` |
+| Connection behaviour | `high_connection_rate`, `repeated_connection_attempts`, `port_scan_vertical`, `port_scan_horizontal` |
+| TCP resets | `high_reset_rate`, `reset_source_host` |
+| DNS | `dns_nxdomain_burst`, `dns_long_names`, `dns_many_subdomains` |
+
+Every finding records the rule, severity (`info`, `low`, `medium`, `high`), a description, a **reason** (measured value against threshold), evidence, affected addresses and flows, supporting packet numbers, and the thresholds in force. Thresholds can be overridden with `NETSCOPE_ANOMALY_THRESHOLDS` (see [Configuration Reference](#configuration-reference)). A finding is a heuristic indicator and **not** proof of malicious activity: busy servers, administrator-run scanners, misconfigured clients and legitimate bursts all trigger these rules.
+
+> **Interface coverage.** The Vue interface presents TCP, DNS and traffic intelligence. Loss indicators and window details appear per connection in the TCP connection detail panel. **Anomaly findings, aggregate loss-indicator lists and window summaries are exposed through the API, CSV exports and the PDF report, not as dedicated pages.**
 
 ### Frontend
 
-A Vue 3 single-page application with a dashboard, capture upload and history, a capture detail area with eight tabs, a two-capture comparison page, and report downloads. Details are in [Frontend Application](#frontend-application).
+The interface is a Vue 3 single-page application using history-mode routing. Navigation is derived from `frontend/src/router/index.js`:
+
+| Route | View | Purpose |
+|---|---|---|
+| `/login`, `/register` | Sign in / create account | Guest-only; returns the user to the page they were trying to reach. |
+| `/dashboard` | Dashboard | Totals across the user's captures, status counts, recent sessions, recent traffic and aggregated protocol distribution; refreshes while jobs run. |
+| `/captures` | Captures | Upload (with progress), capture history, status filter, retry and delete. |
+| `/captures/:id` | Capture overview | Processing progress, then summary of the completed capture; Reports menu; link to comparison. |
+| `/captures/:id/protocols` | Protocol analytics | Transport and application distribution. |
+| `/captures/:id/flows` | Flow inspection | Filterable, sortable flow table (top flows by default). |
+| `/captures/:id/packets` | Packet inspection | Filterable, searchable packet table with per-packet detail. |
+| `/captures/:id/performance` | Performance analytics | Throughput, packets per second, packet sizes, time series, retransmissions, handshake RTT, jitter, optional link utilisation. |
+| `/captures/:id/tcp` | TCP Connections | Success rate, outcome counts, handshake and lifetime histograms, reset analysis, filterable connection table with per-connection detail. |
+| `/captures/:id/dns` | DNS Analytics | Latency, response codes, servers, and filterable transactions with evidence. |
+| `/captures/:id/traffic` | Traffic Intelligence | Top talkers and inbound/outbound classification for user-supplied local networks. |
+| `/compare` | Compare captures | Two completed captures side by side; shareable via `?a=<id>&b=<id>`. |
+
+Filters and paging live in the URL, so views can be bookmarked and the Back button works. Capture IDs are matched as UUIDs in the route; anything else falls through to a not-found page.
 
 ### Reporting
 
-- **PDF report** with capture details, summary totals, protocol tables and chart, performance metrics, throughput chart and top flows. For captures that have advanced analytics, the report is extended with network-intelligence content and the leading anomaly findings.
-- **CSV exports** for packets, flows, protocols, performance and traffic over time, plus ten advanced exports (TCP connections, windows, indicators and summary; DNS transactions and summary; top talkers; traffic direction; anomalies; analytics summary).
-- Packet and flow CSVs honour the same filters as their list endpoints. Spreadsheet-formula-looking cells (`=`, `+`, `-`, `@`, tab, CR) are prefixed with an apostrophe. Reports are generated on demand, sent with `Cache-Control: no-store` and never written to disk.
+Reports are generated on demand for **completed** captures, sent with `Cache-Control: no-store`, and never written to disk.
+
+- **PDF** (`GET /captures/<id>/report.pdf`): capture details, summary, protocol tables and chart, performance with a throughput chart, and the top 15 flows. When Phase 4 results exist, an *Advanced network analytics* section is added: TCP connections, resets, loss indicators and windows, DNS, top talkers, inbound/outbound traffic, the top 15 anomaly findings, and the metric definitions and measurement limitations. The optional `local` query parameter feeds the direction table. User-controlled text is XML-escaped before it is rendered.
+- **CSV** (`GET /captures/<id>/export/<kind>.csv`): `packets` and `flows` honour the same filters as their list endpoints; the other kinds are listed in the [API reference](#reports-and-exports). Cells that a spreadsheet could read as formulas (starting `=`, `+`, `-`, `@`, tab or carriage return) are prefixed with an apostrophe.
+- **In the interface**, the capture page's *Reports* menu offers the PDF and the five base CSVs (packets, flows, protocols, performance, traffic over time). The TCP, DNS and Traffic pages add *Export CSV* buttons for TCP connections, DNS transactions, top talkers and traffic direction. Other advanced CSV kinds are available through the API only.
+
+---
 
 ## Technology Stack
 
-| Layer | Technology | Notes |
-| --- | --- | --- |
-| Backend language | Python 3.12+ | `requires-python = ">=3.12.16"`; `.python-version` pins `3.12.16` |
-| Web framework | Flask 3.1+ | Application factory in `backend/app/__init__.py` |
-| Authentication and CSRF | Flask-Login, Flask-WTF | Session cookies and CSRF tokens |
-| ORM | SQLAlchemy 2 via Flask-SQLAlchemy | PostgreSQL through `psycopg` 3 |
-| Database | PostgreSQL | Tests use SQLite; developed locally against PostgreSQL 18 |
-| Migrations | Alembic via Flask-Migrate | `backend/migrations/` |
-| Background processing | Celery 5.4+ | Tasks run inside a Flask application context |
-| Message broker | Valkey (Redis protocol) | Addressed with a `redis://` URL through `redis-py`; see [Configuration](#configuration-reference) |
-| Packet analysis | Scapy 2.8+ | Streaming reader and dissection |
-| Data processing | Pandas 2.2+ | Used by the statistics accumulator |
-| Validation and models | Pydantic 2 | Domain models for packets and captures |
-| Reports | ReportLab | PDF generation; CSV is streamed from the standard library |
-| WSGI server | Gunicorn | Declared as a dependency for deployment |
-| Frontend framework | Vue 3 | Composition API |
-| Build tooling | Vite 7 | Also proxies `/api` in development |
-| Routing | Vue Router 4 | History mode, lazy-loaded views |
-| State management | Pinia 3 | Stores for auth, captures, dashboard, detail and analytics |
-| Styling | Tailwind CSS 3.4 | System fonts only; no runtime CDN dependencies |
-| Visualisation | Chart.js 4.4 | Wrapped by `BaseChart.vue` |
-| HTTP client | Axios | CSRF handling and error normalisation in `src/api/client.js` |
-| Python tests | pytest | Backend unit and API tests |
-| Frontend tests | Vitest, Vue Test Utils, jsdom | Unit and component tests |
-| Browser tests | Playwright (Python) | Optional; skipped when Chromium is unavailable |
-| Package management | uv (Python), npm (frontend) | Node `^20.19.0 || >=22.12.0` |
+Versions are the constraints declared in `pyproject.toml` and `frontend/package.json`.
 
-## System Architecture
+| Layer | Technology |
+|---|---|
+| Language (backend) | Python ≥ 3.12.16 (`.python-version` pins 3.12.16) |
+| Web framework | Flask ≥ 3.1 |
+| Authentication | Flask-Login (sessions), Flask-WTF (CSRF) |
+| ORM | SQLAlchemy ≥ 2.0 via Flask-SQLAlchemy |
+| Database | PostgreSQL (driver: psycopg 3, URL scheme `postgresql+psycopg`) |
+| Migrations | Alembic via Flask-Migrate |
+| Background processing | Celery ≥ 5.4 |
+| Message broker and result-backend URL | Valkey or Redis, via the `redis` Python client (`redis://` URL) |
+| Packet analysis | Scapy ≥ 2.8 |
+| Data processing | Pandas ≥ 2.2 (time-series bucketing) |
+| Validation and domain models | Pydantic ≥ 2.7 |
+| PDF generation | ReportLab ≥ 4.2 |
+| WSGI server (optional) | Gunicorn ≥ 22 |
+| Python dependency management | uv |
+| Frontend framework | Vue 3 (^3.5) |
+| Build tooling | Vite (^7) |
+| Routing | Vue Router (^4.5) |
+| State management | Pinia (^3) |
+| Styling | Tailwind CSS 3.4.17 (PostCSS, Autoprefixer) |
+| Visualisation | Chart.js 4.4.7 |
+| HTTP client | Axios (^1.7) |
+| Backend testing | pytest (≥ 9.2) |
+| Frontend testing | Vitest with Vue Test Utils and jsdom |
+| Browser testing | Playwright for Python (optional dev dependency; tests skip when unavailable) |
 
-In production the same Flask process serves both the JSON API and the built Vue application, so the browser talks to a single origin. Analysis runs in a separate Celery worker that shares the database and the upload directory with the web process.
+> The repository refers to the broker as Redis (the setting is named `NETSCOPE_REDIS_URL` and the client is `redis`). Valkey is wire-compatible with the Redis protocol, so a Valkey server is addressed through the same `redis://` URL. The PostgreSQL 18 and Valkey versions used in the instructions below describe the development environment this guide targets; the repository itself does not pin server versions.
 
-```mermaid
-flowchart TD
-    Browser["Browser"]
+---
 
-    subgraph WebProcess["Flask application (one origin)"]
-        SPA["SPA host<br/>serves frontend/dist<br/>CSP and index.html fallback"]
-        API["JSON API<br/>/api/v1"]
-        Services["Service layer<br/>capture, auth, queries,<br/>dashboard, export"]
-    end
+## Architecture
 
-    Valkey[("Valkey<br/>Celery broker")]
-
-    subgraph Worker["Celery worker process"]
-        Task["analyze_capture task"]
-        Pipeline["Analysis pipeline<br/>Scapy reader, extractor,<br/>flow tracker, statistics,<br/>advanced analytics"]
-    end
-
-    Storage[("Upload folder<br/>user id / capture id.format")]
-    PG[("PostgreSQL<br/>users, captures, packets, flows,<br/>analysis results, advanced tables")]
-
-    Browser -->|"HTML, JS, CSS"| SPA
-    Browser -->|"XHR with session cookie<br/>and X-CSRFToken"| API
-    API --> Services
-    Services --> PG
-    Services -->|"stream upload"| Storage
-    Services -->|"enqueue task"| Valkey
-    Valkey -->|"deliver task"| Task
-    Task --> Pipeline
-    Pipeline -->|"read capture file"| Storage
-    Pipeline -->|"batched inserts,<br/>status updates"| PG
-```
-
-Engineering decisions worth knowing:
-
-- **Job state lives in PostgreSQL, not in the Celery result backend.** Tasks are configured with `task_ignore_result`, and status, progress and error messages are columns on the capture record. The result backend setting exists but the application does not rely on it.
-- **Uploads are stored on disk, not in the database.** The database holds metadata and a relative storage path, and the path is resolved against the upload root with a check that it cannot escape it.
-- **The frontend and API share an origin.** In production Flask serves the build; in development Vite proxies `/api`. Cookies and CSRF behave identically in both and the backend needs no CORS configuration.
-- **Pure analysis logic is separated from I/O.** The extractor, flow tracker, statistics and every module under `services/analytics/` are plain Python with no Flask or database access, which is what makes them unit-testable in isolation.
-
-### Capture Processing Workflow
-
-```mermaid
-flowchart TD
-    A["Upload: POST /api/v1/captures"] --> B{"Extension and content valid,<br/>within size limit?"}
-    B -- "No" --> R["400 or 413 with a safe message"]
-    B -- "Yes" --> C["Stream to disk, compute SHA-256,<br/>create capture record: uploaded"]
-    C --> D{"analyze requested?<br/>default: yes"}
-    D -- "No" --> U["Stays uploaded<br/>POST /analyze later"]
-    D -- "Yes" --> E["Atomic claim: pending<br/>enqueue Celery task"]
-    E -- "Broker unreachable" --> F1["failed with message<br/>retry available"]
-    E --> G["Worker claims pending capture:<br/>processing"]
-    G --> H["Validate and stream packets<br/>one at a time with Scapy"]
-    H --> I["Extract packet fields,<br/>track flows and retransmissions,<br/>update statistics and analytics"]
-    I --> J["Insert packets in batches<br/>packet_count grows after each batch"]
-    J --> K["Write flows, summary document,<br/>then advanced analytics tables"]
-    K --> L["completed"]
-    H -- "Error or limit exceeded" --> M["Delete partial results<br/>failed with error_message"]
-    I -- "Error or limit exceeded" --> M
-    L --> N["Frontend polls status,<br/>then loads summary, packets,<br/>flows and analytics"]
-```
-
-### Analysis Architecture
+### System architecture
 
 ```mermaid
 flowchart LR
-    File["Capture file"] --> Reader["capture_reader.py<br/>signature detection, framing checks,<br/>streaming Scapy packets"]
-    Reader --> Extractor["packet_extractor.py<br/>ExtractedPacket per packet<br/>malformed packets kept with a reason"]
-    Extractor --> Detector["protocol_detector.py<br/>signature and port labels"]
-    Extractor --> Flows["flow_tracker.py<br/>bidirectional flows,<br/>retransmission flag, RTT, jitter"]
-
-    Flows -->|"flow id and<br/>retransmission flag"| Adv
-    Extractor --> Stats["traffic_stats.py<br/>protocols, throughput,<br/>sizes, time series"]
-    Flows --> Stats
-
-    subgraph Adv["AdvancedAnalyzer: services/analytics"]
-        TCP["tcp_connections.py<br/>outcomes, timing, resets"]
-        Diag["tcp_diagnostics.py<br/>loss indicators, windows"]
-        DNS["dns_analytics.py<br/>latency, failures, timeouts"]
-        Intel["traffic_intel.py<br/>talkers, direction"]
-        Anom["anomalies.py<br/>rule-based findings"]
+    subgraph Client["Browser"]
+        SPA["Vue 3 single-page app"]
     end
 
-    Extractor --> Adv
-    TCP --> Anom
-    Diag --> Anom
-    DNS --> Anom
-    Intel --> Anom
+    subgraph Web["Flask application"]
+        WEB["web blueprint: serves frontend/dist"]
+        API["JSON API under /api/v1"]
+        SVC["services: capture, queries, exports"]
+    end
 
-    Extractor --> PGp[("packets")]
-    Flows --> PGf[("flows")]
-    Stats --> PGs[("analysis_results")]
-    Adv --> PGa[("advanced tables")]
+    subgraph Async["Background processing"]
+        BROKER[("Valkey broker")]
+        WORKER["Celery worker"]
+        PIPE["Analysis pipeline using Scapy"]
+    end
+
+    DB[("PostgreSQL")]
+    FILES[("Capture files on disk")]
+
+    SPA -->|"static assets and index.html"| WEB
+    SPA -->|"fetch with session cookie and CSRF header"| API
+    API --> SVC
+    SVC -->|"SQLAlchemy"| DB
+    SVC -->|"save and delete uploads"| FILES
+    SVC -->|"enqueue analyze_capture"| BROKER
+    BROKER --> WORKER
+    WORKER --> PIPE
+    PIPE -->|"stream packets"| FILES
+    PIPE -->|"batched inserts and results"| DB
 ```
 
-`AdvancedAnalyzer.observe` is called per packet with the flow id and retransmission flag the flow tracker produced, and `finalize` is called once at the end. Per-capture state for connections, DNS transactions and address pairs is held in memory until the pass ends, so memory grows with the number of distinct connections and addresses, not with the number of packets.
+In production the browser talks to a single origin: Flask serves the built SPA and the API. In development the Vite dev server serves the SPA and proxies `/api` to Flask, so requests remain same-origin and no CORS configuration is needed.
 
-### Capture Lifecycle and Job Semantics
+### Capture processing workflow
 
-`uploaded → pending → processing → completed | failed`
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Vue app
+    participant API as Flask API
+    participant Disk as Upload folder
+    participant DB as PostgreSQL
+    participant Q as Valkey
+    participant W as Celery worker
 
-| Transition | Behaviour |
-| --- | --- |
-| `uploaded` or `failed` → `pending` | An atomic conditional update claims the capture, so two concurrent requests cannot queue it twice. If the broker is unreachable the capture becomes `failed` with a retryable message. |
-| `pending` → `processing` | The worker claims only `pending` captures. A duplicate or redelivered message finds no `pending` row and exits. |
-| `processing` → `completed` | Set only after flows, summary and advanced analytics are persisted. |
-| `processing` → `failed` | Partial results are deleted. Messages shown to users have server file paths removed. A capture deleted mid-run is left alone. |
-| `failed` → `pending` | `POST /captures/<id>/analyze` retries, clearing the previous error and any stale results. |
+    User->>UI: choose PCAP or PCAPNG file
+    UI->>API: POST /api/v1/captures (multipart, CSRF token)
+    API->>Disk: stream to temp file, enforce size limit, hash
+    API->>API: validate magic bytes and record framing
+    API->>Disk: move to user_id/capture_id.format
+    API->>DB: insert capture row (status uploaded)
+    API->>DB: claim for queueing (status pending)
+    API->>Q: enqueue netscope.analyze_capture(capture_id)
+    API-->>UI: 201 with capture record
 
-While a capture is `processing`, `packet_count` grows after every stored batch. The UI shows packets processed rather than a percentage, because the total is unknown until the file has been read.
+    Q->>W: deliver task
+    W->>DB: claim pending capture (status processing)
+    W->>Disk: stream packets with Scapy
+    loop every PACKET_BATCH_SIZE packets
+        W->>DB: insert packet rows and update packet_count
+    end
+    W->>DB: insert flows and analysis summary
+    W->>DB: insert Phase 4 documents and tables
+    W->>DB: status completed
 
-## Observed Versus Inferred: How to Read the Results
+    UI->>API: poll status, then load summary, flows, packets, analytics
+    API->>DB: read persisted results
+    API-->>UI: JSON
+```
 
-| Observed directly in the capture | Inferred, and therefore qualified |
-| --- | --- |
-| Packet headers, flags, sequence and acknowledgement numbers, advertised window values | Whether a missing packet was lost in the network, lost by the capture tool, or only reordered |
-| A SYN, SYN-ACK and completing ACK in order (an `established` connection) | That an `incomplete` connection actually failed |
-| A SYN answered by RST-ACK (`refused`, the only confirmed connection failure) | A DNS "timeout" (only an `unanswered_inferred_timeout` when the capture ran on long enough; otherwise `indeterminate`) |
-| An exact duplicate segment in the same direction (a counted retransmission) | Effective TCP window size (reported only when both handshake packets carried window scaling, otherwise `null`) |
-| DNS query/response pairs and their RCODE | Traffic direction (relative only to local networks you supply; with none, everything is `unknown`) |
-| Timestamps as recorded by the capture point | Anomaly findings (threshold heuristics; not proof of malicious activity) |
+The capture status moves through a small state machine:
 
-Packet-loss indicators are evidence commonly associated with loss, not measurements of it. `packet_loss_percent` is always `null`.
+```mermaid
+stateDiagram-v2
+    [*] --> uploaded: upload accepted
+    uploaded --> pending: analysis queued
+    failed --> pending: retry
+    pending --> processing: worker claims capture
+    processing --> completed: all results stored
+    processing --> failed: error, partial results deleted
+    pending --> failed: broker unavailable
+```
 
-## Metric Definitions
+### Analysis architecture
 
-Every analytics response ships the definitions relevant to it (the `definitions` field), and the frontend renders them next to the numbers.
+```mermaid
+flowchart TD
+    R["capture_reader: stream Scapy packets"] --> X["packet_extractor: ExtractedPacket"]
+    X --> FT["FlowTracker: flow_id, retransmission flag, RTT, jitter"]
+    X --> SA["StatsAccumulator: protocols, throughput, time series"]
+    X --> AA["AdvancedAnalyzer"]
+    FT -->|"flow_id and retransmission flag"| AA
 
-### Traditional Metrics
+    subgraph Phase4["Phase 4 trackers inside AdvancedAnalyzer"]
+        TC["TcpConnectionTracker: outcomes, timing, resets, windows"]
+        DN["DnsTracker: transactions, latency, failures"]
+        TI["TrafficIntel: talkers, direction pairs"]
+        DG["tcp_diagnostics: loss indicators, window analysis"]
+        AN["anomalies: threshold rules"]
+    end
+    AA --> TC
+    AA --> DN
+    AA --> TI
+    TC --> DG
+    TC --> AN
+    DN --> AN
+    TI --> AN
 
-- **Bytes** are on-the-wire frame sizes (`original_length`), headers included.
-- **Protocols.** `transport` counts by TCP, UDP, ICMP and ICMPv6 (non-IP traffic such as ARP is listed by name), so HTTP and DNS packets still count towards TCP and UDP. `application` lists DNS and HTTP as identified by the extractor, plus the further protocols named by `protocol_detector.py`.
-- **Flow.** A bidirectional protocol + address/port pair. Endpoint A is the side that sent the first packet.
-- **Retransmission.** A TCP segment carrying payload (or SYN/FIN) whose exact `(sequence number, length)` was already seen in the same direction. The tracker remembers a window of 1,024 segments per direction. Re-segmented or coalesced retransmissions are not detected, so the count is a lower bound. Pure ACKs and RSTs are never counted.
-- **Handshake RTT.** First SYN to its SYN-ACK as seen at the capture point. Only flows whose handshake was captured have one.
-- **Jitter.** Mean absolute difference between consecutive packet inter-arrival gaps within a flow. This is arrival-time jitter; a capture has no send timestamps, so RFC 3550 transit-time jitter is not possible. It needs at least three packets in the flow.
-- **Utilisation.** Computed only when `link_mbps` is supplied.
+    X -->|"batched"| P1[("packets")]
+    FT --> P2[("flows")]
+    SA --> P3[("analysis_results")]
+    Phase4 --> P4[("advanced_analyses plus tcp_connections, tcp_indicators, dns_transactions, ip_traffic, ip_pairs, anomaly_findings")]
+```
 
-### Network Intelligence Metrics
+`services/analysis_pipeline.py` drives the loop: for each packet it calls `extract_packet`, then `FlowTracker.observe`, `StatsAccumulator.observe` and `AdvancedAnalyzer.observe`. Packets are inserted in batches while the pass runs. Flows, the summary document and the Phase 4 results are written after the last packet, and only then is the capture marked `completed`.
 
-- **TCP connection success rate** = established ÷ observable attempts, where observable attempts are connections whose initial SYN was captured (established + incomplete + refused). Mid-stream connections are `unclassified` and excluded. The rate is `null` when there are no attempts.
-- **Handshake time** = first SYN to the completing client ACK, for established connections only. It includes SYN retransmission delay because it starts at the first SYN. **Observed lifetime** = first to last captured packet.
-- **Termination** is `fin` (FIN from both sides), `reset`, `half_closed` (FIN from one side) or `none`.
-- **DNS response time** = first query transmission to the response, matched on client and server address and port, DNS transaction id and transport (UDP and TCP are never cross-matched). Retransmitted queries and duplicate responses are not double counted.
-- **DNS failure rate** = responses with RCODE other than NOERROR ÷ responses observed (NXDOMAIN included). `server_failure_rate` excludes NXDOMAIN. Unanswered queries are never part of either rate.
-- **TCP reset rates.** Packet rate = RST packets ÷ TCP packets. Connection rate = connections with at least one RST ÷ tracked TCP connections.
-- **Top talkers.** Ranked by bytes or packets as source, destination or bidirectional, with total IP bytes/packets as denominators. Bidirectional shares across addresses add up to about 200 %, because each packet has two endpoints.
-- **Direction.** Source local and destination local is `internal`; local to remote is `outbound`; remote to local is `inbound`; neither is `unknown`. Private address ranges are never assumed local.
-- **Loss indicators.** `retransmission`, `duplicate_ack` (RFC 5681 sense: a pure ACK repeating the previous ACK number and window while the peer has unacknowledged data in flight), `sequence_gap`, `out_of_order` and `partial_overlap`. Sequence arithmetic is modulo 2³². Keep-alive and zero-window probes are ignored.
-- **Windows.** The advertised window is what the packet's sender announces. A raw value is scaled by 2^shift only when both SYN and SYN-ACK were captured and both carried a window-scale option.
+### Design decisions
 
-### Anomaly Rules
+- **One pass, bounded memory per packet.** Packets stream from disk and are persisted in batches, so memory does not grow with packet count. State that needs the whole capture (flows, connections, DNS transactions, address pairs) is held until the end of the pass, so memory grows with the number of distinct flows, connections, DNS transactions and addresses.
+- **Analyse once, query many times.** Results are persisted, so the interface, exports and comparison are database reads. Indexes on `(capture_id, …)` support the filters and sort orders the API offers.
+- **Job state lives in the database.** Celery results are ignored (`task_ignore_result`); the capture row is the source of truth. The conditional `pending → processing` update makes the worker idempotent, and the queueing step uses an atomic conditional update so two concurrent requests cannot enqueue the same capture.
+- **Never serve partial results.** A capture becomes `completed` only after everything is stored; on failure, everything stored for it is deleted.
+- **Owner scoping is part of the query, not an afterthought.** A single `get_owned_capture` helper backs every capture route, and a miss is always `404`.
+- **Passive-capture honesty.** Definitions, denominators and limitations are part of the stored result and are returned by the API, so the interface can show them beside the numbers.
+- **Flask serves the built SPA.** Production needs one process type for web traffic and no separate static host. Authentication is enforced by the API on every request; the app shell is public and contains no user data.
+- **Pure-logic core.** Extraction, flow tracking, statistics and the Phase 4 analytics are plain Python over data objects, which keeps them unit-testable without a database or a broker.
 
-Anomaly detection is plain threshold rules over metrics NetScope already measured. There is no machine learning and no threat intelligence. Each finding carries its rule, severity, description, the value against the threshold, evidence, affected addresses and flows, packet references, and the thresholds in force.
+### Data model
 
-| Rule | Fires when |
-| --- | --- |
-| `http_on_nonstandard_port` | Cleartext HTTP is seen on ports other than the usual HTTP ports |
-| `non_dns_on_dns_port` | Payload on port 53 did not parse as DNS |
-| `udp_on_tcp_service_port` | UDP payload to ports normally used only by TCP services |
-| `high_volume_host` | One address sent more than the byte threshold |
-| `traffic_burst` | Peak packet rate is far above the median interval rate |
-| `high_connection_rate` | One source opened many TCP connections in a short window |
-| `repeated_connection_attempts` | Many attempts to one destination service that mostly never completed |
-| `port_scan_vertical` | One source tried many destination ports on one host |
-| `port_scan_horizontal` | One source tried one port on many hosts |
-| `dns_nxdomain_burst` | A client received many NXDOMAIN answers |
-| `dns_long_names` | A client queried unusually long DNS names or labels |
-| `dns_many_subdomains` | A client queried many distinct subdomains of one domain |
-| `high_reset_rate` | An unusually large share of TCP packets were resets |
-| `reset_source_host` | One address sent many TCP resets |
-| `host_traffic_concentration` | A single address sent almost all bytes among many hosts |
-| `icmp_heavy` | ICMP made up a large share of packets |
+| Table | Contents |
+|---|---|
+| `users` | Email (unique) and password hash. |
+| `captures` | Owner, display filename, format, size, SHA-256, relative storage path, status, timestamps, packet count, error message, Celery task ID. |
+| `packets` | One row per packet: link, network and transport fields, TCP sequence and window fields, `flow_id`, retransmission flag, `malformed_reason`, application metadata (JSON). |
+| `flows` | One row per bidirectional flow, with per-direction packet and byte counts, timing, retransmissions, RTT and jitter. |
+| `analysis_results` | Aggregate columns plus the `summary` JSON document (protocols, performance, TCP, latency). |
+| `advanced_analyses` | The Phase 4 summary document: results, definitions, limitations and thresholds used. |
+| `tcp_connections` | One row per tracked TCP connection: state, timings, termination, resets, window and truncation details. |
+| `tcp_indicators` | Loss indicators per connection and direction, with severity and evidence. |
+| `dns_transactions` | One row per DNS transaction: client, server, question, status, RCODE, latencies, retries. |
+| `ip_traffic`, `ip_pairs` | Per-address and per-address-pair totals that back top talkers and direction classification. |
+| `anomaly_findings` | One row per rule finding, with evidence, affected addresses and flows, packet references and thresholds. |
 
-Default thresholds live in `AnomalyThresholds` in `backend/app/services/analytics/anomalies.py` and can be overridden with `NETSCOPE_ANOMALY_THRESHOLDS`. Unknown names and non-positive values are rejected at startup. Thresholds are applied when a capture is analysed, so changing them affects only captures analysed afterwards.
+Tables hanging off a capture reference `captures.id` with `ON DELETE CASCADE`. The schema is managed by three Alembic migrations in `backend/migrations/versions/`: users and captures; packets, flows and analysis results; and Phase 4 network intelligence.
 
-## Frontend Application
-
-The interface is a Vue 3 single-page application in `frontend/`. Routes are defined in `frontend/src/router/index.js`; every route except sign-in and registration requires authentication.
-
-| Route | View | Purpose |
-| --- | --- | --- |
-| `/login`, `/register` | Sign in, create account | Guest-only; signed-in users are redirected away. After sign-in the user returns to the page they were trying to reach. |
-| `/dashboard` | Dashboard | Totals across your captures, processing-status summary, recent sessions, recent traffic and aggregated protocol distribution. |
-| `/captures` | Captures | Drag-and-drop upload with progress, capture history with status filter, retry and delete. |
-| `/captures/<id>` | Overview | Capture details, live processing progress, summary statistics, and the **Reports** menu. |
-| `/captures/<id>/protocols` | Protocols | Transport and application protocol distribution. |
-| `/captures/<id>/flows` | Flows | Flow table with filters; top flows by default sort. |
-| `/captures/<id>/packets` | Packets | Packet explorer with search, filters, pagination and a packet detail panel. |
-| `/captures/<id>/performance` | Performance | Throughput, packets per second, packet sizes, time series, retransmissions, RTT and jitter; optional link-speed input for utilisation. |
-| `/captures/<id>/tcp` | TCP Connections | Connection outcomes, success rate, handshake and lifetime distributions, resets, loss indicators, window analysis. |
-| `/captures/<id>/dns` | DNS Analytics | Response-time and failure analysis, transaction list with filters. |
-| `/captures/<id>/traffic` | Traffic Intelligence | Top talkers, inbound/outbound classification relative to local networks you enter, and rule-based anomaly findings. |
-| `/compare` | Compare | Choose two completed captures for metric-by-metric deltas, protocol comparison and IP overlap; shareable via `?a=<id>&b=<id>`. |
-
-The capture detail page has two tab rows: the five core tabs (Overview, Protocols, Flows, Packets, Performance) and a second row for the network-intelligence tabs (TCP Connections, DNS Analytics, Traffic Intelligence).
-
-Implementation notes:
-
-- Filters and paging live in the URL, so views can be bookmarked and the Back button works.
-- Each data-driven page has loading, empty and error states. Captures without advanced analytics show an "unavailable" notice instead of empty charts.
-- All capture-derived text is rendered through Vue text interpolation; the app never uses `v-html`, so hostile filenames or packet contents cannot inject markup.
-- Downloads go through the authenticated Axios client; the server's error message is recovered from error responses even when the expected body was a PDF or CSV.
-- A 401 from the API signs the user out locally and sends them to the sign-in page with a return path.
+---
 
 ## Repository Structure
 
 ```text
 netscope/
-├── pyproject.toml                  Python project, dependencies, pytest configuration
-├── .python-version                 Pinned Python version
-├── .env.example                    Documented environment variables (not auto-loaded)
-├── .gitignore
-├── LICENSE                         Apache License 2.0
-├── README.md
-│
+├── pyproject.toml            # Python project, dependencies, pytest configuration
+├── .python-version           # Python 3.12.16
+├── .env.example              # Template of supported environment variables
+├── uv.lock                   # Locked Python dependency versions (uv)
+├── Dockerfile                # Multi-stage image build (frontend, Python dependencies, runtime)
+├── compose.yaml              # Docker Compose stack: db, redis, migrate, web, worker
+├── .dockerignore             # Keeps secrets, captures and local files out of the build context
+├── LICENSE                   # Apache License 2.0
 ├── backend/
-│   ├── wsgi.py                     WSGI entry point and Celery app (celery_app)
+│   ├── wsgi.py               # Entry point for Flask (app) and Celery (celery_app)
 │   ├── app/
-│   │   ├── __init__.py             Application factory: config, extensions, blueprints, headers
-│   │   ├── config.py               Environment-based configuration classes
-│   │   ├── extensions.py           db, migrate, login_manager, csrf
-│   │   ├── celery_app.py           Celery bound to the Flask application context
-│   │   ├── api/                    JSON API blueprints, mounted under /api/v1
-│   │   │   ├── health.py           Liveness
-│   │   │   ├── auth.py             CSRF token, register, login, logout, me
-│   │   │   ├── captures.py         Upload, list, detail, status, analyze, delete
-│   │   │   ├── analysis.py         Summary, protocols, performance, packets, flows
-│   │   │   ├── advanced.py         TCP, DNS, traffic and anomaly endpoints
-│   │   │   ├── dashboard.py        Dashboard aggregates and capture comparison
-│   │   │   └── reports.py          CSV exports and PDF report
-│   │   ├── models/                 Pydantic domain models (Capture, Packet)
-│   │   ├── schemas/                Pydantic schemas
-│   │   ├── orm/                    SQLAlchemy tables (users, captures, packets, flows,
-│   │   │                           analysis results, advanced analytics tables)
+│   │   ├── __init__.py       # create_app() application factory
+│   │   ├── config.py         # Environment-driven configuration classes
+│   │   ├── extensions.py     # db, migrate, login_manager, csrf
+│   │   ├── celery_app.py     # Celery bound to the Flask app context
+│   │   ├── api/              # Blueprints under /api/v1 (auth, captures, analysis, advanced, dashboard, reports, health)
+│   │   ├── models/           # Pydantic domain models (Capture, Packet)
+│   │   ├── schemas/          # Pydantic schemas
+│   │   ├── orm/              # SQLAlchemy tables (users, captures, packets, flows, results, Phase 4 tables)
 │   │   ├── services/
-│   │   │   ├── capture_reader.py       Format detection, structure validation, streaming reader
-│   │   │   ├── capture_storage.py      Secure file storage and path resolution
-│   │   │   ├── capture_service.py      Upload, ownership-scoped queries, job submission, delete
-│   │   │   ├── packet_extractor.py     Scapy packet to NetScope packet (pure logic)
-│   │   │   ├── protocol_detector.py    Application protocol identification
-│   │   │   ├── flow_tracker.py         Flows, retransmissions, RTT, jitter (pure logic)
-│   │   │   ├── traffic_stats.py        Protocol, throughput and time-series statistics
-│   │   │   ├── analysis_pipeline.py    Reader, extractor, trackers and persistence in one pass
-│   │   │   ├── analysis_queries.py     Packet and flow filtering, sorting, pagination
-│   │   │   ├── advanced_queries.py     Filters and queries for Phase 4 data
-│   │   │   ├── advanced_persistence.py Persists Phase 4 results
-│   │   │   ├── dashboard_service.py    Dashboard aggregates and comparison
-│   │   │   ├── export_service.py       Streaming CSV and PDF generation
-│   │   │   ├── auth_service.py         Registration and authentication
-│   │   │   └── analytics/              Phase 4 analytics (pure logic)
-│   │   │       ├── engine.py               AdvancedAnalyzer orchestration and definitions
-│   │   │       ├── tcp_connections.py      Connection outcomes, timing, resets
-│   │   │       ├── tcp_diagnostics.py      Loss indicators and window analysis
-│   │   │       ├── dns_analytics.py        DNS transactions, latency, failures
-│   │   │       ├── traffic_intel.py        Top talkers and direction
-│   │   │       ├── anomalies.py            Rule-based anomaly detection
-│   │   │       └── common.py               Shared helpers
-│   │   ├── web/spa.py              Serves the built Vue app, CSP and index.html fallback
-│   │   └── workers/tasks.py        Celery task: analyze_capture
-│   ├── migrations/                 Alembic environment
-│   │   └── versions/               Three revisions: users and captures; packets, flows and
-│   │                               analysis results; Phase 4 network intelligence
-│   └── tests/                      Backend unit and API tests (pytest)
-│
+│   │   │   ├── capture_reader.py        # Format detection, structural validation, streaming Scapy reader
+│   │   │   ├── capture_storage.py       # Secure upload storage and path resolution
+│   │   │   ├── capture_service.py       # Upload, ownership-scoped queries, queueing, deletion
+│   │   │   ├── packet_extractor.py      # Scapy packet to structured record
+│   │   │   ├── protocol_detector.py     # Signature and port based application labels
+│   │   │   ├── flow_tracker.py          # Bidirectional flows, retransmissions, RTT, jitter
+│   │   │   ├── traffic_stats.py         # Protocol, throughput and time-series statistics
+│   │   │   ├── analysis_pipeline.py     # Single-pass reader to extractor to trackers to database
+│   │   │   ├── analysis_queries.py      # Packet and flow filtering, search, sorting
+│   │   │   ├── advanced_persistence.py  # Writes Phase 4 results
+│   │   │   ├── advanced_queries.py      # Phase 4 filters and queries
+│   │   │   ├── dashboard_service.py     # Dashboard aggregates and capture comparison
+│   │   │   ├── export_service.py        # CSV and PDF generation
+│   │   │   ├── auth_service.py          # Registration and authentication
+│   │   │   └── analytics/               # Phase 4: tcp_connections, tcp_diagnostics, dns_analytics,
+│   │   │                                #          traffic_intel, anomalies, engine, common
+│   │   ├── web/spa.py        # Serves frontend/dist with history-mode fallback and CSP
+│   │   └── workers/tasks.py  # Celery task: netscope.analyze_capture
+│   ├── migrations/           # Alembic environment and versions/
+│   └── tests/                # pytest unit and API tests (SQLite)
 ├── frontend/
-│   ├── package.json                Scripts and dependencies
-│   ├── vite.config.js              Vite, dev and preview proxy, Vitest configuration
-│   ├── tailwind.config.js, postcss.config.js
-│   ├── .env.example                Optional Vite variables
-│   ├── index.html
+│   ├── package.json          # Scripts and dependencies
+│   ├── vite.config.js        # Dev server, /api proxy, build output, Vitest settings
+│   ├── tailwind.config.js
+│   ├── .env.example          # Optional Vite settings
 │   ├── src/
-│   │   ├── main.js, App.vue
-│   │   ├── router/                 Routes, auth guards, safe post-login redirect
-│   │   ├── api/                    Axios client (CSRF, errors) and one module per API area
-│   │   ├── stores/                 Pinia stores
-│   │   ├── composables/            Polling, async state, URL-backed filters, upload, downloads
-│   │   ├── layouts/                AppLayout (sidebar and top bar), AuthLayout
-│   │   ├── views/                  One view per route
-│   │   ├── components/             common, dashboard, captures, packets, flows, analytics, charts
-│   │   └── utils/                  Formatting, chart configuration, safe redirects
-│   └── tests/                      Vitest unit and component tests
-│
+│   │   ├── main.js           # App bootstrap, 401 handling
+│   │   ├── router/           # Routes, auth guards
+│   │   ├── api/              # Axios client (CSRF, errors) and per-area API modules
+│   │   ├── stores/           # Pinia stores (auth, captures, dashboard, captureDetail, analytics, session)
+│   │   ├── composables/      # Polling, paged lists, URL-backed filters, upload, downloads, comparison
+│   │   ├── layouts/          # AppLayout, AuthLayout
+│   │   ├── views/            # One view per route
+│   │   ├── components/       # common, dashboard, captures, packets, flows, analytics, charts
+│   │   └── utils/            # Formatting, chart configuration, safe redirects
+│   └── tests/                # Vitest unit and component tests
 ├── tests/
-│   └── e2e/                        Real-browser tests (Playwright) against the production build
-│
+│   └── e2e/                  # Playwright browser tests (skipped without Chromium or a frontend build)
 └── docs/
-    └── phase4-network-intelligence.md   Network-intelligence design, definitions and limitations
+    └── phase4-network-intelligence.md   # Phase 4 metric definitions and limitations
 ```
 
-Entry points: `backend/wsgi.py` (Flask `app` and Celery `celery_app`), `backend/app/__init__.py` (`create_app`), and `frontend/src/main.js`.
-
-Note: the repository does not currently include a `uv.lock` file, so `uv sync` resolves dependencies from `pyproject.toml` and creates one locally.
+---
 
 ## Installation and Local Development
 
-These instructions target Fedora/Linux. Run every command from the repository root unless stated otherwise.
+These steps target Fedora (or a similar Linux distribution). Run everything from the repository root.
 
-### Prerequisites
+### 1. Prerequisites
 
 | Requirement | Notes |
-| --- | --- |
-| Python 3.12 or newer | The project requires `>=3.12.16`; `uv` can fetch it |
-| [uv](https://docs.astral.sh/uv/) | Python dependency management |
-| Node.js `^20.19.0` or `>=22.12.0`, and npm | Frontend build |
-| PostgreSQL | The development setup used PostgreSQL 18; the repository does not pin a version |
-| Valkey | Celery broker; speaks the Redis protocol |
-| Chromium (optional) | Only for the browser tests |
+|---|---|
+| Python | ≥ 3.12.16. [uv](https://docs.astral.sh/uv/) can provision the interpreter named in `.python-version`. |
+| uv | Python dependency management. |
+| Node.js and npm | Node `^20.19.0` or `>=22.12.0` (the range declared in `frontend/package.json`). Check with `node --version`. |
+| PostgreSQL | The development environment used here runs PostgreSQL 18. |
+| Valkey (or Redis) | Used as the Celery broker. |
+| Git | To clone the repository. |
 
-### 1. Clone and Install Dependencies
+### 2. Clone the repository
 
 ```bash
 git clone <repository-url> netscope
 cd netscope
+```
 
+### 3. Install Python dependencies
+
+```bash
 uv sync
+```
+
+`uv sync` installs the project and the `dev` dependency group (pytest and Playwright) into `.venv`.
+
+### 4. Install frontend dependencies
+
+```bash
 npm --prefix frontend ci
 ```
 
-`uv sync` also installs the `dev` dependency group (pytest and Playwright).
+### 5. Start and configure PostgreSQL and Valkey
 
-### 2. Start PostgreSQL and Valkey
-
-On the development machine these run as systemd services:
+Start both services (service names as installed in this development environment; yours may differ):
 
 ```bash
 sudo systemctl start postgresql-18
 sudo systemctl start valkey
 ```
 
-Service names depend on how PostgreSQL was installed (the `postgresql-18` name matches the PostgreSQL project's own packages). A first-time PostgreSQL install also needs its data directory initialised according to your packaging's instructions.
-
-### 3. Create the Database
-
-These credentials are **local development examples only**. They match the default `NETSCOPE_DATABASE_URL`, which is why nothing needs configuring in development.
+Create a database role and database. **These credentials are an example for local development only.** Use a strong, unique password anywhere else.
 
 ```bash
-sudo -u postgres psql -c "CREATE USER netscope WITH PASSWORD 'netscope';"
-sudo -u postgres psql -c "CREATE DATABASE netscope OWNER netscope;"
+sudo -u postgres psql <<'SQL'
+CREATE ROLE netscope LOGIN PASSWORD 'netscope';
+CREATE DATABASE netscope OWNER netscope;
+SQL
 ```
 
-For anything other than a local machine, use a strong generated password and a dedicated database user. Never commit credentials.
+### 6. Configure environment variables
 
-### 4. Configure Environment Variables
-
-NetScope reads real environment variables only. It does **not** load `.env` files itself. `.env.example` documents the variables; to use a local copy, load it into your shell:
-
-```bash
-cp .env.example .env
-set -a; source .env; set +a
-```
-
-`.env` is ignored by Git. For the local setup above, the two settings that matter are:
+NetScope reads **real environment variables only**. It does not load `.env` files itself. Export the variables in each terminal that runs Flask, Celery or the migration command:
 
 ```bash
 export NETSCOPE_DATABASE_URL="postgresql+psycopg://netscope:netscope@localhost:5432/netscope"
 export NETSCOPE_REDIS_URL="redis://localhost:6379/0"
 ```
 
-Both are also the built-in defaults. `NETSCOPE_ENV` defaults to `development`, which uses an insecure built-in `SECRET_KEY` and non-secure session cookies. The full list is in the [Configuration Reference](#configuration-reference).
+These match the defaults in `backend/app/config.py`, so they may be omitted for a stock local setup. To keep settings in a file instead:
 
-The variable is named `NETSCOPE_REDIS_URL` because Valkey is accessed over the Redis protocol with a `redis://` URL and the `redis` Python client; point it at your Valkey instance.
+```bash
+cp .env.example .env     # .env is git-ignored; never commit it
+set -a; source .env; set +a
+```
 
-Environment variables must be set in **every** terminal that runs Flask or Celery.
+> **Edit the copy first.** `.env.example` contains the line `NETSCOPE_SECRET_KEY=` with no value. Sourcing it unchanged sets the variable to an empty string, which overrides the development default and makes the application refuse to start (`NETSCOPE_SECRET_KEY must be set outside development and testing`). Either delete that line or give it a value.
 
-### 5. Apply Migrations and Build the Frontend
+For anything beyond local development, set `NETSCOPE_ENV=production` and generate a secret key:
+
+```bash
+export NETSCOPE_ENV=production
+export NETSCOPE_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+```
+
+### 7. Apply database migrations
 
 ```bash
 uv run python -m flask --app backend/wsgi db upgrade
+```
+
+### 8. Build the frontend
+
+```bash
 npm --prefix frontend run build
 ```
 
-The build writes `frontend/dist`, which Flask serves. If it is missing, Flask answers `503` with the build command.
+This writes `frontend/dist`, which Flask serves.
 
-### 6. Run the Application
-
-Terminal 1, the Flask server:
+### 9. Start the Flask server (terminal 1)
 
 ```bash
 uv run python -m flask --app backend/wsgi run
 ```
 
-Terminal 2, the Celery worker:
+### 10. Start the Celery worker (terminal 2)
+
+Export the same environment variables in this terminal, then:
 
 ```bash
 uv run python -m celery --workdir backend -A wsgi:celery_app worker --loglevel=info
 ```
 
-Open <http://localhost:5000>, register an account, and upload a capture. Without a running worker, uploaded captures remain `pending` and are never processed.
+### 11. Open the application
 
-### Optional: Vite Development Workflow
+Visit <http://localhost:5000>, register an account, and upload a `.pcap` or `.pcapng` file. Without a running worker, uploaded captures stay `pending`.
 
-For hot reload, run Flask and Celery as above, then start the Vite dev server in a third terminal:
+### Optional: Vite development workflow
+
+For hot reload, keep Flask and the Celery worker running, then start the Vite dev server in a third terminal:
 
 ```bash
 npm --prefix frontend run dev
 ```
 
-The app is then at <http://localhost:5173>. The Vite server (port 5173, `strictPort`) proxies `/api` to the Flask development server at `http://127.0.0.1:5000`, so the browser only ever talks to one origin, session cookies and CSRF work exactly as in production, and Flask needs no CORS settings. `changeOrigin` is deliberately off so the `Host` and `Referer` headers that Flask-WTF compares stay consistent.
+Open <http://localhost:5173>. Vite proxies `/api` to `http://127.0.0.1:5000` (override with `VITE_DEV_PROXY_TARGET`). Because the browser only talks to Vite, requests stay same-origin and session cookies and CSRF work as in production. Optional Vite settings go in `frontend/.env.local` (see `frontend/.env.example`). `npm --prefix frontend run preview` serves the production build on port 4173 with the same proxy.
 
-Override the proxy target or API base URL by copying `frontend/.env.example` to `frontend/.env.local` (ignored by Git):
+If `frontend/dist` is missing, Flask answers `503` with the build command instead of the app.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `VITE_DEV_PROXY_TARGET` | `http://127.0.0.1:5000` | Where the dev server proxies `/api` |
-| `VITE_API_BASE_URL` | `/api/v1` | API base URL. Keep the same-origin default; a cross-origin URL would need CORS on Flask, which is not configured. |
+---
 
-`npm --prefix frontend run preview` serves the production build on port 4173 with the same proxy.
+## Docker Deployment
+
+NetScope ships with a multi-stage `Dockerfile`, a `.dockerignore` and a `compose.yaml` that run the complete stack (database, broker, migrations, web application and worker) on a single machine. This is a **local Docker Compose deployment**; the repository does not describe any other deployment target.
+
+### Why Docker
+
+NetScope needs five cooperating pieces: a PostgreSQL database, a Valkey broker, a one-off migration step, the Flask web process and a Celery worker that must see the same uploaded files as the web process. Running them by hand means installing and starting each service, exporting the same environment variables in several terminals and building the frontend first (see [Installation and Local Development](#installation-and-local-development)). Docker Compose replaces that with one image and one command, and gives a reproducible runtime: the same Python 3.12.16 interpreter, the locked dependency set from `uv.lock`, and a pre-built Vue bundle, running as a non-root user.
+
+### Image build architecture
+
+The `Dockerfile` has three stages, so build tooling (Node.js, `uv`, `npm` caches) never reaches the final image.
+
+```mermaid
+flowchart LR
+    subgraph S1["Stage 1: frontend-build"]
+        N["node:22-bookworm-slim"] --> NB["npm ci, then npm run build"]
+    end
+    subgraph S2["Stage 2: python-build"]
+        P["python:3.12.16-slim-bookworm plus uv"] --> PB["uv sync --frozen --no-dev --no-editable"]
+    end
+    subgraph S3["Stage 3: runtime"]
+        R["python:3.12.16-slim-bookworm"] --> RU["non-root user netscope"]
+    end
+    NB -->|"frontend/dist"| R
+    PB -->|".venv"| R
+    BE["backend/ source"] --> R
+```
+
+| Stage | Base image | What it does |
+|---|---|---|
+| `frontend-build` | `node:22-bookworm-slim` | Copies `package.json` and `package-lock.json`, runs `npm ci`, copies the frontend sources and runs `npm run build` to produce `frontend/dist`. |
+| `python-build` | `python:3.12.16-slim-bookworm` | Copies `uv` from `ghcr.io/astral-sh/uv:latest`, then runs `uv sync --frozen --no-dev --no-editable` against `pyproject.toml` and `uv.lock` (bytecode compiled, development dependencies excluded). `README.md` is copied too, because `pyproject.toml` declares it as the project readme. |
+| `runtime` | `python:3.12.16-slim-bookworm` | Copies the virtual environment, the `backend/` sources and the compiled frontend. Creates the system user and group `netscope` and the writable `/data/uploads` directory, then runs as `netscope`. Exposes port `8000`; the default command is `gunicorn --bind 0.0.0.0:8000 wsgi:app`. |
+
+Settings baked into the runtime image:
+
+| Variable | Value | Effect |
+|---|---|---|
+| `PATH` | `/app/.venv/bin:$PATH` | Commands such as `flask`, `gunicorn` and `celery` come from the locked environment. |
+| `PYTHONPATH` | `/app/backend` | Makes the `app` package and `wsgi` module importable. |
+| `NETSCOPE_FRONTEND_DIST` | `/app/frontend/dist` | Flask serves the compiled Vue app from here. |
+| `NETSCOPE_UPLOAD_FOLDER` | `/data/uploads` | Capture files are stored on the `uploads` volume. |
+
+`.dockerignore` keeps the build context small and safe: it excludes `.git/`, virtual environments, caches, `node_modules/`, a local `frontend/dist/`, `.env` files (only `.env.example` is kept), the local `instance/` data folder, capture files (`*.pcap`, `*.pcapng`, `*.cap`), editor files and logs.
+
+### Docker Compose service architecture
+
+`compose.yaml` defines five services. `migrate`, `web` and `worker` all run the same `netscope:local` image with different commands and read their configuration from `.env`.
+
+```mermaid
+flowchart TD
+    DB[("db: PostgreSQL 16")]
+    VK[("redis: Valkey 8")]
+    MIG["migrate: flask db upgrade"]
+    WEB["web: Gunicorn on port 8000"]
+    WRK["worker: Celery"]
+    PGV[("volume postgres_data")]
+    UPV[("volume uploads")]
+
+    DB -->|"healthy"| MIG
+    MIG -->|"completed successfully"| WEB
+    MIG -->|"completed successfully"| WRK
+    VK -->|"healthy"| WEB
+    VK -->|"healthy"| WRK
+    DB --- PGV
+    WEB --- UPV
+    WRK --- UPV
+    Browser["Browser: http://localhost:8000"] --> WEB
+```
+
+| Service | Image | Purpose | Notable settings |
+|---|---|---|---|
+| `db` | `postgres:16-alpine` | PostgreSQL database. | Creates database, user and password `netscope` on first start; data on the `postgres_data` volume; health check with `pg_isready`; `restart: unless-stopped`. |
+| `redis` | `valkey/valkey:8-alpine` | Valkey (Redis-compatible) broker for Celery. | Health check with `valkey-cli ping`; `restart: unless-stopped`. |
+| `migrate` | `netscope:local` | Applies database migrations (`flask --app wsgi db upgrade`). | Waits for `db` to be healthy; `restart: "no"`, so it runs once and exits. |
+| `web` | `netscope:local` | Flask application served by Gunicorn. | Publishes `8000:8000`; mounts `uploads` at `/data/uploads`; starts only after `migrate` completed successfully and `redis` is healthy. |
+| `worker` | `netscope:local` | Celery worker that analyses uploaded captures (`celery -A wsgi:celery_app worker --loglevel=info`). | Mounts the same `uploads` volume as `web`; same start conditions as `web`. |
+
+Design points:
+
+- **Ordered startup.** `migrate` waits for a healthy database, and `web` and `worker` wait for `migrate` to finish with `service_completed_successfully` and for Valkey to be healthy. If a migration fails, neither starts.
+- **Shared uploads.** The web process writes uploaded captures and the worker reads them, so both mount the same `uploads` volume.
+- **No `build:` section.** The three application services use the image tag `netscope:local`, so the image must be built with `docker build` before `docker compose up`.
+- **Only `web` is published.** The database and broker are reachable only from inside the Compose network.
+
+### Prerequisites
+
+- Docker Engine with the Compose plugin (the `docker compose` command).
+- A clone of this repository. The build context needs `Dockerfile`, `pyproject.toml`, `uv.lock`, `README.md`, `backend/` and `frontend/`.
+- Port `8000` free on the host.
+- Network access on first build to pull base images and install packages.
+
+You do not need Python, `uv`, Node.js, PostgreSQL or Valkey installed on the host.
+
+### Configure the environment
+
+`compose.yaml` loads `.env` (`env_file`) into `migrate`, `web` and `worker`. Create it from the template:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`. Inside the Compose network the services reach each other by **service name**, not `localhost`, and the database credentials must match the ones defined for `db` in `compose.yaml`:
+
+```bash
+NETSCOPE_DATABASE_URL=postgresql+psycopg://netscope:netscope@db:5432/netscope
+NETSCOPE_REDIS_URL=redis://redis:6379/0
+NETSCOPE_SECRET_KEY=<a long random string>
+```
+
+Generate a secret key with, for example:
+
+```bash
+openssl rand -base64 48
+```
+
+| Variable | Docker notes |
+|---|---|
+| `NETSCOPE_DATABASE_URL` | Host must be `db`. The user, password and database name `netscope` come from the `db` service's `POSTGRES_*` settings in `compose.yaml`. These are example credentials for local use; change them in both places for anything shared. |
+| `NETSCOPE_REDIS_URL` | Host must be `redis` (the Valkey service name). |
+| `NETSCOPE_SECRET_KEY` | Must be non-empty. The template line is blank, and an empty value stops the application from starting. |
+| `NETSCOPE_ENV` | Defaults to `development`. With `production`, a secret key is mandatory and the session cookie is marked `Secure`, so sign-in is intended to work over HTTPS; some browsers will not send a `Secure` cookie over plain `http://localhost:8000`. |
+| `NETSCOPE_UPLOAD_FOLDER`, `NETSCOPE_FRONTEND_DIST` | Already set by the image to `/data/uploads` and `/app/frontend/dist`. |
+
+All other variables are described in the [Configuration Reference](#configuration-reference).
+
+> **Warning: protect your secrets.** `.env` holds `NETSCOPE_SECRET_KEY` and database credentials. Never commit it (it is git-ignored) and never paste its contents into issues, logs or screenshots. Anyone who knows the secret key can forge session cookies. Only `.env.example` belongs in version control, and it must never contain a real key. `.dockerignore` keeps `.env` files out of the image build context.
+
+### Build the image
+
+From the repository root:
+
+```bash
+docker build -t netscope:local .
+```
+
+### Start the application
+
+```bash
+docker compose up -d
+```
+
+Compose starts `db` and `redis`, runs `migrate` to completion, then starts `web` and `worker`.
+
+### Inspect the services
+
+```bash
+docker compose ps -a
+```
+
+Use `-a` so the finished `migrate` container is listed. Healthy output shows `db` and `redis` as healthy, `web` and `worker` as running, and `migrate` as exited with code 0; that exit is expected and means the migrations were applied.
+
+```bash
+docker compose logs -f              # follow all services (Ctrl+C stops following)
+docker compose logs migrate         # migration output
+docker compose logs -f web worker   # application and worker output
+```
+
+### Access the application
+
+| What | URL |
+|---|---|
+| Web interface | <http://localhost:8000> |
+| Health endpoint | `GET http://localhost:8000/api/v1/health` |
+
+```bash
+curl -i http://localhost:8000/api/v1/health
+```
+
+A healthy application answers `200 OK` with `{"status": "healthy"}`. Open the web interface, register an account and upload a capture as described in [Capabilities](#capabilities).
+
+During the verification of this setup the health endpoint returned HTTP 200 with that body, the migrations completed successfully, and the Celery worker connected to Valkey and registered the `netscope.analyze_capture` task.
+
+### Stop the services
+
+```bash
+docker compose down
+```
+
+This removes the containers and network but keeps the named volumes, so your data survives the next `docker compose up -d`.
+
+After changing application code, rebuild the image and recreate the containers:
+
+```bash
+docker build -t netscope:local .
+docker compose up -d
+```
+
+### Persistent data
+
+| Volume | Mounted by | Contents |
+|---|---|---|
+| `postgres_data` | `db` at `/var/lib/postgresql/data` | The PostgreSQL database: users, captures, packets, flows and analysis results. |
+| `uploads` | `web` and `worker` at `/data/uploads` | Uploaded capture files, stored as `<user_id>/<capture_id>.<format>`. |
+
+> **Warning: `docker compose down -v` permanently deletes both volumes**, removing every account, every analysis result and every uploaded capture. Use plain `docker compose down` unless you want a clean slate.
+
+Back up both volumes before deleting them if the data matters. Because the database and the files are stored separately, restore them together.
+
+### Troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| `docker compose up` cannot find `netscope:local`, or tries to pull it | The image has not been built. Run `docker build -t netscope:local .` first. |
+| `env file .env not found` | Create it with `cp .env.example .env` and edit it. |
+| `db` or `redis` is `unhealthy`, or `web`/`worker` stay in `Created` | Run `docker compose ps -a` and `docker compose logs db redis`. `web` and `worker` do not start until `redis` is healthy and `migrate` has exited with code 0. Port conflicts on `8000` are reported when `web` starts. |
+| `migrate` exits with a non-zero code | Read `docker compose logs migrate`. Typical causes: `NETSCOPE_DATABASE_URL` still points at `localhost` instead of `db`, the user, password or database name does not match the `db` service, or the `postgres_data` volume was initialised earlier with different credentials (the `POSTGRES_*` values apply only when the volume is first created). Fix `.env`, then run `docker compose up -d` again. |
+| `web`, `worker` or `migrate` exits immediately with a secret-key or configuration error | `NETSCOPE_SECRET_KEY` is empty, or `NETSCOPE_ENV` is not one of `development`, `testing`, `production`. A malformed `NETSCOPE_ANOMALY_THRESHOLDS`, or a non-integer value in a numeric variable, also stops startup; see `docker compose logs web`. |
+| Worker starts but captures stay `pending` | Check `docker compose logs -f worker` for a connection error to the broker. `NETSCOPE_REDIS_URL` must use host `redis`. The worker log should list the `netscope.analyze_capture` task. |
+| Uploads fail or the worker cannot find a capture | `web` and `worker` must both mount the same `uploads` volume; do not override one of them. |
+
+After fixing the cause, `docker compose up -d` recreates only what changed. If a service keeps restarting, `docker compose logs --tail=100 <service>` shows its most recent output.
+
+---
 
 ## Configuration Reference
 
-Configuration is defined in `backend/app/config.py`. All variables are optional in development; `NETSCOPE_SECRET_KEY` is required in production.
-
 | Variable | Purpose | Required | Default | Example |
-| --- | --- | --- | --- | --- |
-| `NETSCOPE_ENV` | `development`, `testing` or `production`. Any other value stops startup. | No | `development` | `production` |
-| `NETSCOPE_SECRET_KEY` | Signs session cookies and CSRF tokens. | Yes in production (startup fails without it) | Development only: an insecure built-in key | A long random string (see below) |
+|---|---|---|---|---|
+| `NETSCOPE_ENV` | `development`, `testing` or `production`. | No | `development` | `production` |
+| `NETSCOPE_SECRET_KEY` | Flask secret for sessions and CSRF. | **Yes in production**; optional in development | development uses an insecure built-in key; production has none | a long random string |
 | `NETSCOPE_DATABASE_URL` | SQLAlchemy database URL. | No | `postgresql+psycopg://netscope:netscope@localhost:5432/netscope` | `postgresql+psycopg://user:***@db-host:5432/netscope` |
-| `NETSCOPE_REDIS_URL` | Celery broker **and** result backend URL (Valkey over the Redis protocol). | No | `redis://localhost:6379/0` | `redis://localhost:6379/0` |
-| `NETSCOPE_UPLOAD_FOLDER` | Where uploaded captures are stored. | No | `backend/instance/uploads` | `/var/lib/netscope/uploads` |
-| `NETSCOPE_MAX_UPLOAD_BYTES` | Maximum upload size; also sets Flask's `MAX_CONTENT_LENGTH`. | No | `209715200` (200 MB) | `104857600` |
-| `NETSCOPE_MAX_PACKETS` | Per-capture packet limit; a larger capture fails with a clear message. | No | `2000000` | `500000` |
-| `NETSCOPE_PACKET_BATCH_SIZE` | Packets inserted per database batch (also the progress-update cadence). | No | `5000` | `5000` |
-| `NETSCOPE_FRONTEND_DIST` | Directory of the built Vue app Flask serves. | No | `frontend/dist` | `/srv/netscope/dist` |
-| `NETSCOPE_ANOMALY_THRESHOLDS` | JSON object overriding anomaly-rule thresholds, validated at startup. Names are the fields of `AnomalyThresholds`. | No | Built-in thresholds | `{"port_scan_distinct_ports": 30}` |
-| `NETSCOPE_DNS_TIMEOUT_SECONDS` | Seconds a DNS query must stay unanswered, with the capture still running, to be an inferred timeout. Must be positive. | No | `5` | `5` |
-| `NETSCOPE_CHROMIUM_PATH` | Use a specific Chromium executable for the browser tests. Read by `tests/e2e` only. | No | Playwright's Chromium | `/usr/bin/chromium` |
-| `NETSCOPE_SHOTS` | Directory where the browser tests write screenshots. Read by `tests/e2e` only. | No | `/tmp/netscope-shots` | `/tmp/netscope-shots` |
+| `NETSCOPE_REDIS_URL` | Celery broker and result-backend URL (Valkey or Redis). | No | `redis://localhost:6379/0` | `redis://localhost:6379/0` |
+| `NETSCOPE_UPLOAD_FOLDER` | Where capture files are stored. | No | `backend/instance/uploads` | `/var/lib/netscope/uploads` |
+| `NETSCOPE_MAX_UPLOAD_BYTES` | Maximum upload size; also sets Flask's `MAX_CONTENT_LENGTH`. | No | `209715200` (200 MiB) | `104857600` |
+| `NETSCOPE_MAX_PACKETS` | Maximum packets per capture; larger captures fail analysis. | No | `2000000` | `500000` |
+| `NETSCOPE_PACKET_BATCH_SIZE` | Packets written to the database per batch (also the progress-update interval). | No | `5000` | `5000` |
+| `NETSCOPE_FRONTEND_DIST` | Directory of the built Vue app that Flask serves. | No | `frontend/dist` | `/srv/netscope/dist` |
+| `NETSCOPE_ANOMALY_THRESHOLDS` | JSON object overriding anomaly-rule thresholds; applied when a capture is analysed and validated at startup. | No | unset (built-in thresholds) | `{"port_scan_distinct_ports": 30}` |
+| `NETSCOPE_DNS_TIMEOUT_SECONDS` | Seconds a DNS query must stay unanswered, with the capture still running, to count as an inferred timeout. Must be positive. | No | `5` | `5` |
 
-Generate a production secret without storing it anywhere:
+Integer variables must parse as integers and an invalid value stops the application at startup. Production sets `SESSION_COOKIE_SECURE`, so serve it over HTTPS.
 
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+**Test and frontend variables**
 
-Other behaviour fixed in code: session cookies are HttpOnly and SameSite=Lax; `SESSION_COOKIE_SECURE` is on in production (serve it over HTTPS) and off in development and testing; CSRF tokens are tied to the session and do not expire on their own; `.pcap`, `.pcapng` and `.cap` are the accepted extensions.
+| Variable | Used by | Purpose |
+|---|---|---|
+| `NETSCOPE_CHROMIUM_PATH` | `tests/e2e` | Use an existing Chromium or Chrome executable instead of Playwright's. |
+| `NETSCOPE_SHOTS` | `tests/e2e` | Directory for browser-test screenshots (default `/tmp/netscope-shots`). |
+| `VITE_DEV_PROXY_TARGET` | Vite dev and preview servers | Where `/api` is proxied (default `http://127.0.0.1:5000`). |
+| `VITE_API_BASE_URL` | Frontend build | API base URL (default `/api/v1`). A cross-origin value would need CORS on Flask, which the backend deliberately does not enable. |
+
+**Anomaly threshold names** (defaults in parentheses; every value must be a positive number, and unknown names are rejected):
+`non_standard_port_min_packets` (1), `non_dns_on_dns_port_min_packets` (5), `udp_on_tcp_port_min_packets` (3), `high_volume_host_bytes` (100000000), `burst_peak_to_median_ratio` (10.0), `burst_min_peak_pps` (500.0), `burst_min_intervals` (10), `connection_rate_window_seconds` (10.0), `connection_rate_threshold` (100), `repeated_attempt_threshold` (5), `repeated_attempt_min_unsuccessful_ratio` (0.8), `port_scan_distinct_ports` (20), `horizontal_scan_distinct_hosts` (20), `dns_nxdomain_min_count` (20), `dns_nxdomain_min_ratio` (0.5), `dns_long_name_length` (60), `dns_long_label_length` (40), `dns_long_name_min_queries` (5), `dns_subdomain_unique_threshold` (50), `reset_rate_threshold` (0.10), `reset_min_packets` (20), `reset_host_threshold` (50), `concentration_share` (0.90), `concentration_min_hosts` (5), `concentration_min_bytes` (100000), `icmp_share` (0.30), `icmp_min_packets` (100).
+
+---
 
 ## API Reference
 
-All routes are mounted under `/api/v1`. The interface is JSON, except where a route returns a file.
+All routes are under `/api/v1`. Unless noted, routes require a signed-in session (`401` otherwise) and are scoped to the caller's own captures (`404` for anyone else's).
 
-### Conventions
+**Conventions**
 
-- **Authentication.** Every route except `GET /health`, `GET /auth/csrf`, `POST /auth/register` and `POST /auth/login` requires a session. A missing session returns `401`.
-- **CSRF.** Every state-changing request (`POST`, `DELETE`) must carry an `X-CSRFToken` header whose value comes from `GET /api/v1/auth/csrf`. This includes login and registration.
-- **Ownership.** Capture routes are owner-scoped; another user's capture returns `404`.
-- **Completion.** Analysis, packet, flow, advanced, comparison and report routes return `409` until the capture is `completed`.
-- **Errors** use one envelope: `{"error": {"code", "name", "message"}}`, with extra fields where relevant (for example validation `errors`, or `reason`).
-- **Pagination.** List routes accept `page` and `per_page` and return `items`, `page`, `per_page` and `total`. Invalid filter values return `400` with the reason.
+- **CSRF.** `POST` and `DELETE` requests need the `X-CSRFToken` header; fetch the token from `GET /auth/csrf`. The token is bound to the session, so fetch a fresh one after login, registration or logout.
+- **Errors** use one envelope: `{"error": {"code", "name", "message", ...}}`. Registration validation failures add an `errors` object keyed by field. Invalid filter values return `400` with the reason.
+- **Lists** return `{"items", "page", "per_page", "total"}`.
+- **Completed only.** Analysis, analytics, export and comparison routes return `409` until the capture is `completed`.
 
-### Health and Authentication
+### Health and authentication
 
 | Method | Route | Description |
-| --- | --- | --- |
-| GET | `/health` | Liveness check |
-| GET | `/auth/csrf` | Returns a CSRF token for JSON clients |
-| POST | `/auth/register` | JSON `{email, password}`; creates the account and starts a session (`201`). `400` on validation errors, `409` if the email exists. |
-| POST | `/auth/login` | JSON `{email, password}`; starts a session. `401` for bad credentials. |
-| POST | `/auth/logout` | Ends the session |
-| GET | `/auth/me` | The current user |
+|---|---|---|
+| `GET` | `/health` | Liveness check (no authentication). |
+| `GET` | `/auth/csrf` | CSRF token for session-authenticated clients. |
+| `POST` | `/auth/register` | JSON `{email, password}`; creates the user and starts a session (`201`; `400` validation, `409` duplicate email). |
+| `POST` | `/auth/login` | JSON `{email, password}`; starts a session (`401` on failure). |
+| `POST` | `/auth/logout` | Ends the session. |
+| `GET` | `/auth/me` | The current user. |
 
 ### Captures
 
 | Method | Route | Description |
-| --- | --- | --- |
-| POST | `/captures` | Multipart upload with a `file` field (and optional `analyze=false` to skip queueing). Returns `201`; `413` if over the size limit. |
-| GET | `/captures` | Paginated capture list (`per_page` up to 100) with an optional `status` filter |
-| GET | `/captures/<id>` | Capture details |
-| GET | `/captures/<id>/status` | Processing status and live `packet_count` |
-| POST | `/captures/<id>/analyze` | Queue analysis or retry (`202`). `409` unless the capture is `uploaded` or `failed`; `503` if the broker is unavailable. |
-| DELETE | `/captures/<id>` | Delete the record and file (`204`) |
+|---|---|---|
+| `POST` | `/captures` | Multipart `file` (and optional `analyze=false`); validates, stores and queues analysis (`201`; `400` rejected file; `413` too large). |
+| `GET` | `/captures` | Paginated list; `page`, `per_page` (max 100), `status`. |
+| `GET` | `/captures/<id>` | Capture record. |
+| `GET` | `/captures/<id>/status` | Status, `packet_count` (live while processing), timestamps, `error_message`. |
+| `POST` | `/captures/<id>/analyze` | Queue analysis (`202`); `409` unless `uploaded` or `failed`; `503` if the broker is unavailable. |
+| `DELETE` | `/captures/<id>` | Delete the file and all stored results (`204`). |
 
-### Summary and Analytics
+### Summary and analytics
 
 | Method | Route | Description |
-| --- | --- | --- |
-| GET | `/captures/<id>/summary` | Capture info, totals (packets, bytes, unique IPs, flows, malformed) and protocols |
-| GET | `/captures/<id>/protocols` | Packet and byte counts per transport and per application protocol |
-| GET | `/captures/<id>/performance` | Throughput, packets per second, packet sizes, time series, TCP retransmissions, RTT and jitter. Optional `link_mbps` adds link utilisation. |
+|---|---|---|
+| `GET` | `/captures/<id>/summary` | Capture info, totals (packets, bytes, unique IPs, flows, malformed) and protocols. |
+| `GET` | `/captures/<id>/protocols` | Packet and byte counts per transport and application protocol. |
+| `GET` | `/captures/<id>/performance` | Throughput, packets per second, packet sizes, time series, TCP retransmissions, handshake RTT and jitter. Optional `link_mbps` (positive number) adds utilisation. |
 
 ### Packets
 
 | Method | Route | Description |
-| --- | --- | --- |
-| GET | `/captures/<id>/packets` | Paginated packets. Filters: `protocol`, `src_ip`, `dst_ip`, `ip`, `src_port`, `dst_port`, `port`, `flow_id`, `min_length`, `max_length`, `tcp_flags`, `malformed`, `retransmission`, `q` (search). `sort` is `number`, `time` or `length`; `order` is `asc` or `desc`; `per_page` up to 200. |
-| GET | `/captures/<id>/packets/<n>` | One packet with every extracted field |
+|---|---|---|
+| `GET` | `/captures/<id>/packets` | Paginated packets (default 50 per page, max 200). Filters: `protocol`, `src_ip`, `dst_ip`, `ip`, `src_port`, `dst_port`, `port`, `flow_id`, `min_length`, `max_length`, `tcp_flags` (letters `FSRPAUEC`), `malformed`, `retransmission`, `q` (search); `sort` (`number`, `time`, `length`), `order`. |
+| `GET` | `/captures/<id>/packets/<packet_number>` | One packet with every extracted field. |
 
 ### Flows
 
 | Method | Route | Description |
-| --- | --- | --- |
-| GET | `/captures/<id>/flows` | Paginated flows. Filters: `protocol`, `application`, `ip`, `port`. `sort` is `bytes`, `packets`, `duration` or `start`. Default sort by bytes gives the top flows. |
-| GET | `/captures/<id>/flows/<flow_id>` | One flow |
+|---|---|---|
+| `GET` | `/captures/<id>/flows` | Paginated flows (default 25 per page). Filters: `protocol`, `application`, `ip`, `port`; `sort` (`bytes`, `packets`, `duration`, `start`), `order`. The default (bytes, descending) is the top-flows view. |
+| `GET` | `/captures/<id>/flows/<flow_id>` | One flow. |
 
-### Advanced Network Intelligence Endpoints
+### Advanced network intelligence
 
-All are owner-scoped, require a `completed` capture, and answer `409` with `reason: "analytics_unavailable"` for captures analysed before the advanced analytics existed.
-
-| Method | Route | Description |
-| --- | --- | --- |
-| GET | `/captures/<id>/analytics` | The complete stored analytics document, including metric definitions and limitations |
-| GET | `/captures/<id>/tcp/summary` | TCP connection outcomes, success rate, timing distributions, reset and indicator summaries |
-| GET | `/captures/<id>/tcp/connections` | Paginated connections. Filters: `state`, `ip`, `port`, `flow_id`, `termination`, `truncated`, `has_reset`, `zero_window`, `retransmissions`. `sort` is `start`, `duration`, `handshake`, `packets`, `bytes`, `resets` or `zero_window`. |
-| GET | `/captures/<id>/tcp/connections/<connection_id>` | One connection with detail |
-| GET | `/captures/<id>/tcp/resets` | TCP reset analysis |
-| GET | `/captures/<id>/tcp/indicators` | Paginated loss indicators. Filters include `type` (`retransmission`, `duplicate_ack`, `sequence_gap`, `out_of_order`, `partial_overlap`) and `severity`. |
-| GET | `/captures/<id>/tcp/windows` | Receive-window analysis and the connections with the most zero-window events |
-| GET | `/captures/<id>/dns/summary` | DNS latency, response-code breakdown and failure rates |
-| GET | `/captures/<id>/dns/transactions` | Paginated DNS transactions. Filters include `status` (`answered`, `unanswered`, `unanswered_inferred_timeout`, `unanswered_indeterminate`, `unmatched_response`), `rcode`, `transport`, `q`. |
-| GET | `/captures/<id>/dns/transactions/<transaction_id>` | One DNS transaction |
-| GET | `/captures/<id>/traffic/talkers` | Top talkers. Parameters: `by` (`bytes`/`packets`), `role` (`source`/`destination`/`bidirectional`), `limit` (up to 100), `ip_version` (`4`/`6`). |
-| GET | `/captures/<id>/traffic/direction` | Inbound/outbound/internal/unknown breakdown. `local` takes comma-separated networks, for example `local=10.0.0.0/24,2001:db8::/32`. |
-| GET | `/captures/<id>/anomalies` | Paginated anomaly findings. Filters: `severity` (`info`, `low`, `medium`, `high`), `rule`, `ip`. |
-| GET | `/captures/<id>/anomalies/<finding_id>` | One finding with evidence and thresholds |
-
-### Dashboard and Comparison
+These routes return `409` with `"reason": "analytics_unavailable"` for captures analysed before Phase 4. Summary responses include the relevant `definitions` (and, for TCP, `limitations`).
 
 | Method | Route | Description |
-| --- | --- | --- |
-| GET | `/dashboard` | Totals across your captures, status counts, recent sessions, recent traffic and aggregated protocol distribution |
-| GET | `/compare?a=<id>&b=<id>` | Metric-by-metric deltas, protocol comparison and IP overlap for two different completed captures |
+|---|---|---|
+| `GET` | `/captures/<id>/analytics` | The complete Phase 4 document (summaries, definitions, limitations, thresholds). |
+| `GET` | `/captures/<id>/tcp/summary` | Connection outcomes, success rate, handshake and lifetime distributions. |
+| `GET` | `/captures/<id>/tcp/connections` | Paginated connections. Filters: `state`, `termination`, `ip`, `port`, `flow_id`, `truncated`, `has_reset`, `zero_window`, `retransmissions`; `sort` (`start`, `duration`, `handshake`, `packets`, `bytes`, `resets`, `zero_window`), `order`. |
+| `GET` | `/captures/<id>/tcp/connections/<connection_id>` | One connection with its loss indicators. |
+| `GET` | `/captures/<id>/tcp/resets` | Reset packet and connection rates, with evidence. |
+| `GET` | `/captures/<id>/tcp/indicators` | Paginated loss indicators. Filters: `type`, `severity`, `connection_id`, `flow_id`; `sort` (`severity`, `count`, `connection`), `order`. Includes a diagnostics summary. |
+| `GET` | `/captures/<id>/tcp/windows` | Window analysis and up to 50 connections with zero-window events. |
+| `GET` | `/captures/<id>/dns/summary` | Latency distribution, failure rates, response codes, server statistics, unanswered counts. |
+| `GET` | `/captures/<id>/dns/transactions` | Paginated transactions. Filters: `status` (`answered`, `unanswered`, `unanswered_inferred_timeout`, `unanswered_indeterminate`, `unmatched_response`), `rcode`, `transport` (`udp`, `tcp`), `client_ip`, `server_ip`, `q`, `min_latency_ms`; `sort` (`time`, `latency`, `name`, `retries`), `order`. |
+| `GET` | `/captures/<id>/dns/transactions/<transaction_id>` | One transaction. |
+| `GET` | `/captures/<id>/traffic/talkers` | Top talkers. Parameters: `by` (`bytes`, `packets`), `role` (`source`, `destination`, `bidirectional`), `limit` (1 to 100, default 10), `ip_version` (`4`, `6`). |
+| `GET` | `/captures/<id>/traffic/direction` | Inbound, outbound, internal and unknown totals. Parameter: `local` (comma-separated addresses or CIDR networks). |
+| `GET` | `/captures/<id>/anomalies` | Paginated findings. Filters: `severity`, `rule`, `ip`, `order`. Includes summary, thresholds and definitions. |
+| `GET` | `/captures/<id>/anomalies/<finding_id>` | One finding. |
 
-### Reports and Exports
+### Dashboard and comparison
 
 | Method | Route | Description |
-| --- | --- | --- |
-| GET | `/captures/<id>/report.pdf` | PDF report; extended with network-intelligence content when available. Optional `local` for direction classification. |
-| GET | `/captures/<id>/export/<kind>.csv` | CSV export. `kind` is one of `packets`, `flows`, `protocols`, `performance`, `timeseries`, `tcp-connections`, `tcp-windows`, `tcp-indicators`, `tcp-summary`, `dns-transactions`, `dns-summary`, `top-talkers`, `traffic-direction`, `anomalies`, `analytics-summary`. |
+|---|---|---|
+| `GET` | `/dashboard` | Totals across the caller's captures, status counts, recent sessions, recent traffic, aggregated protocol distribution. |
+| `GET` | `/compare?a=<id>&b=<id>` | Metric deltas, protocol comparison and IP overlap for two different completed captures (`400` for invalid or identical IDs). |
 
-List-style exports accept the same filters as the matching list endpoint. An unknown `kind` returns `404` listing the valid kinds. The Reports menu in the UI exposes the PDF and the five core CSV exports. The TCP, DNS and Traffic Intelligence pages add export buttons for `tcp-connections`, `dns-transactions`, `top-talkers` and `traffic-direction`; the remaining advanced CSVs (`tcp-windows`, `tcp-indicators`, `tcp-summary`, `dns-summary`, `anomalies`, `analytics-summary`) are available through the API only.
+### Reports and exports
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/captures/<id>/report.pdf` | PDF report (extended with Phase 4 sections when available). Optional `local` for direction classification. |
+| `GET` | `/captures/<id>/export/<kind>.csv` | CSV export. Base kinds: `packets`, `flows`, `protocols`, `performance`, `timeseries`. Advanced kinds (`409 analytics_unavailable` for pre-Phase-4 captures): `tcp-connections`, `tcp-windows`, `tcp-indicators`, `tcp-summary`, `dns-transactions`, `dns-summary`, `top-talkers`, `traffic-direction`, `anomalies`, `analytics-summary`. List-style exports accept the same filters as their list endpoints. An unknown kind returns `404`. |
+
+### Frontend routes
+
+Any non-`/api` path that is not a real file returns `index.html` so client-side routes survive a reload. Unclaimed `/api/...` paths return a JSON `404`.
+
+---
 
 ## Testing and Validation
 
-Test configuration lives in `pyproject.toml` (`testpaths = ["backend/tests", "tests"]`, `pythonpath = ["backend"]`).
-
-**Backend** (pytest):
-
 ```bash
+# Backend: unit and API tests (browser tests are skipped when unavailable)
+uv run pytest
+
+# Backend tests only
 uv run pytest backend/tests
-```
 
-The backend suite does not need PostgreSQL or Valkey: it uses SQLite and runs Celery in eager mode (`TestingConfig`), with broker failures simulated. It covers the packet extractor, flow tracker, traffic statistics, protocol detector, analytics core, capture reader and validation, authentication, the capture, analysis, advanced-analytics, dashboard and report APIs, the SPA host, the worker, and a check that the Alembic migrations produce exactly the schema the models declare. Behaviour against a live PostgreSQL and a live Valkey broker is therefore exercised by running the application, not by this suite.
-
-The analytics core can also be run without the project environment:
-
-```bash
-PYTHONPATH=backend python -m unittest backend/tests/test_analytics_core.py
-```
-
-**Frontend** (Vitest, jsdom):
-
-```bash
+# Frontend unit and component tests (Vitest)
 npm --prefix frontend test
 ```
 
-**Browser end-to-end** (Playwright):
+The backend suite builds the application with `TestingConfig`: an **SQLite** database, Celery in eager mode (tasks run inline), and CSRF checks disabled. It therefore needs **neither PostgreSQL nor Valkey**. A migration test applies all migrations to a fresh database and fails if the result differs from the ORM models. Consequently, the repository's automated tests do not exercise a live PostgreSQL deployment or a live broker; verify those against your own environment.
+
+**Browser tests** (Playwright, in `tests/e2e`) start a live Flask server with CSRF enforcement on, serving the production build, and drive Chromium through the interface. They are skipped when Playwright, a Chromium build, or `frontend/dist` is missing:
 
 ```bash
-uv run python -m playwright install chromium
 npm --prefix frontend run build
+uv run playwright install chromium     # once; or set NETSCOPE_CHROMIUM_PATH
 uv run pytest tests/e2e
 ```
 
-These tests start a live Flask server with CSRF enforcement on, serve the production build, and drive Chromium through the application. They are **skipped automatically** when Playwright, a Chromium build or `frontend/dist` is unavailable. Set `NETSCOPE_CHROMIUM_PATH` to use an existing Chromium. Screenshots are written to `/tmp/netscope-shots` (override with `NETSCOPE_SHOTS`).
-
-**Everything:**
-
-```bash
-uv run pytest
-```
-
-runs the backend and browser suites together (the browser tests skip if unavailable).
-
-## Security Notes
-
-- **Isolation.** Every capture query is filtered by owner, and ownership failures look identical to missing resources.
-- **Uploads.** Validated by file signature and structure rather than extension, streamed with a hard size limit, stored under server-generated names, and error messages never include server paths.
-- **Sessions and CSRF.** HttpOnly, SameSite=Lax cookies (Secure in production), and CSRF tokens on all state-changing requests with a single refresh-and-retry on rejection.
-- **Content Security Policy.** The app shell is served with `script-src 'self'`, no inline script and no framing. Capture-derived text is never rendered as markup, and PDF text is XML-escaped.
-- **Headers.** `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY` are set on all responses.
-- **Public shell, protected data.** The app shell contains no user data; access control is enforced by the API on every request. Router guards are a convenience only.
-- **Not implemented:** login rate limiting, email verification and password reset.
+---
 
 ## Operational Notes
 
-- **Run a worker.** Without a Celery worker, captures stay `pending`. Run the worker with time limits generous enough for your largest expected captures.
-- **Throughput.** Analysis speed is bounded by Scapy's dissection. The earlier sandbox measurement recorded roughly 1 to 2 thousand packets per second on a shared two-core machine (a 300,000-packet capture took about four minutes with a peak process size of about 230 MB). Treat that as an order-of-magnitude indication, not a guarantee: a capture near the default 2,000,000-packet limit can take tens of minutes on similar hardware.
-- **Memory** grows with the number of distinct flows, addresses, connections and DNS transactions, and the seconds a capture spans, not with the number of packets.
-- **Uploads on disk.** Back up or mount `NETSCOPE_UPLOAD_FOLDER` consistently for both the Flask process and the worker, since both read it.
-- **Production.** Set `NETSCOPE_ENV=production` and `NETSCOPE_SECRET_KEY`, serve over HTTPS, and run Flask under a WSGI server rather than the development server. Gunicorn is a declared dependency and `backend/wsgi.py` exposes `app`, but a Gunicorn deployment is not covered by the repository's tests and no deployment configuration (container, proxy, process manager) is provided.
-- **Migrations.** Run `db upgrade` after pulling changes. The three revisions are `3ad16f3f764b` (users and captures), `6384d2549255` (packets, flows, analysis results) and `a4f1c2d9b7e3` (Phase 4 network intelligence).
+- **Two process types.** The web process (Flask) and one or more Celery workers must share the database, the broker and, because the worker reads uploaded files from disk, the upload folder. If web and worker run on different machines, `NETSCOPE_UPLOAD_FOLDER` must point at storage both can reach.
+- **Production-style serving.** `gunicorn` is a declared dependency (for example `uv run python -m gunicorn --chdir backend wsgi:app`), and the repository includes a local Docker Compose setup (see [Docker Deployment](#docker-deployment)). NetScope is not described here as hosted anywhere. Run it behind HTTPS with `NETSCOPE_ENV=production` and a real `NETSCOPE_SECRET_KEY`.
+- **Resource use.** Analysis speed is bounded by Scapy's dissection. Memory grows with the number of distinct flows, connections, DNS transactions and addresses, not with packet count. Size `NETSCOPE_MAX_UPLOAD_BYTES` and `NETSCOPE_MAX_PACKETS` for your hardware, and give workers enough time for your largest expected capture.
+- **Uploads and secrets.** Capture files are stored under the upload folder and are git-ignored (`*.pcap`, `*.pcapng`, `instance/`). `.env` files are git-ignored; never commit credentials. Treat uploaded captures as sensitive data.
+- **Progress.** While a capture is `processing`, `packet_count` advances after every stored batch, so progress is a packet count, not a percentage (the total is unknown until the file has been read).
+
+---
 
 ## Limitations and Interpretation Notes
 
-Implemented behaviour first, then what is not implemented.
+**What the data can and cannot show**
 
-**Interpretation**
+- **Analysis is limited to the supplied capture.** Only traffic and payload visible in the uploaded file are analysed. Metrics are as good as the capture point and duration.
+- **Packet-loss indicators are not loss measurements.** Retransmissions, duplicate ACKs and sequence gaps cannot independently establish whether a packet was lost in the network, lost by the capture tool, or merely reordered. NetScope reports no loss percentage.
+- **Incomplete connections are not confirmed failures.** Only refused connections (SYN answered by RST-ACK) are reported as confirmed failures.
+- **DNS timeouts are inferred.** An unanswered query becomes an inferred timeout only when the capture ran at least the configured timeout past its last transmission; the response may also have bypassed the capture point.
+- **Direction depends on configuration.** Inbound, outbound and internal classification is meaningful only for the local networks you supply; with none, all traffic is `unknown`.
+- **Anomaly findings are heuristics.** The rules are explainable thresholds, not a replacement for a dedicated intrusion detection system, and a finding is not evidence of malicious activity.
+- **Retransmission counts are a lower bound** (exact repeats within a 1024-segment window per direction). RTT needs a captured handshake; jitter needs at least three packets in the flow; effective TCP window sizes need both SYN and SYN-ACK with window scaling.
 
-- **Loss indicators are not loss measurements.** Retransmissions, duplicate ACKs and sequence gaps cannot independently establish whether loss happened in the network, in the capture tool, or whether packets were merely reordered. NetScope never reports a loss percentage.
-- **Direction depends on configuration.** Inbound/outbound/internal classification exists only relative to the local networks you supply. With none, every packet is `unknown`; private ranges are never assumed local.
-- **Anomaly findings are heuristics.** They are explainable threshold rules, not a replacement for a dedicated intrusion detection system, and they do not prove malicious activity. Busy servers, administrator-run scanners and legitimate bursts can all trigger them.
-- **`incomplete` is not `failed`.** Only `refused` (SYN answered by RST-ACK) is a confirmed connection failure.
-- **DNS timeouts are inferences.** An unanswered query is an inferred timeout only when the capture continued long enough afterwards; even then the response may have bypassed the capture point.
-- **A capture shows only what it saw.** Analysis is limited to the traffic and payload visible in the supplied file: snap-length truncation, a mid-connection start, or a capture point that sees one direction only all limit what can be concluded.
+**Implementation limits**
 
-**Known limitations**
+- **Captures analysed before Phase 4 have no advanced analytics.** Phase 4 endpoints return `409` with `reason: "analytics_unavailable"` for them. Analysis can only be queued from `uploaded` or `failed`, so a completed capture cannot be re-analysed in place; delete it and upload it again to obtain Phase 4 results.
+- **Anomaly thresholds are applied at analysis time.** Changing `NETSCOPE_ANOMALY_THRESHOLDS` affects captures analysed afterwards.
+- **DNS over TCP** is extracted only when a whole DNS message sits in a single TCP segment; messages spanning several segments are not reassembled.
+- **VLAN decoding** records the 802.1Q tag Scapy exposes as the VLAN ID; stacked tags are not modelled separately.
+- **Application-protocol identification** covers DNS, HTTP and the signatures and ports the detector knows; other protocols appear under their transport.
+- **Interface coverage.** Anomaly findings, aggregate loss-indicator lists and window summaries are available through the API, CSV and PDF, but have no dedicated page in the Vue application.
+- **Dashboard** protocol distribution uses the user's 100 most recent analysed captures.
+- **Not implemented:** live capture, login rate limiting, email verification, password reset.
+- **Not covered by automated tests:** a live PostgreSQL and a live broker (see [Testing and Validation](#testing-and-validation)).
 
-- **Earlier captures lack advanced analytics.** Captures processed before the Phase 4 migration have no advanced results and cannot be re-analysed in place. Advanced endpoints answer `409` with `reason: "analytics_unavailable"`, and the interface shows an "unavailable" notice.
-- **Retransmission counts are a lower bound** (exact repeats within a 1,024-segment window per direction; re-segmented retransmissions appear as partial overlaps instead).
-- **DNS over TCP** is recognised only when a whole message sits in one TCP segment; messages split across several segments are not reassembled.
-- **Application identification is best effort.** Only DNS (UDP and TCP) and HTTP (request or status line) are parsed from payload by the extractor; other protocols are labelled by signature or well-known port. Bare handshake/ACK packets and TLS continuation segments are deliberately left unlabelled rather than guessed.
-- **Anomaly thresholds** apply when a capture is analysed; changing them requires re-analysis, which for completed captures is not offered in place.
-- **Dashboard protocol distribution** uses your 100 most recent analysed captures.
-- **Progress** shows packets processed, not a percentage.
-- **Not verified:** operation against a live Valkey broker is not covered by automated tests (see [Testing](#testing-and-validation)).
-- **Not implemented:** login rate limiting, email verification, password reset, live packet capture, and any shipped deployment configuration.
+---
 
 ## Contributing
 
-1. Fork the repository and create a branch from the default branch.
-2. Install dependencies as described in [Installation](#installation-and-local-development).
-3. Keep analysis logic pure (no Flask or database access in extractor, tracker and analytics modules) and add unit tests alongside changes; the API and browser suites cover the integration.
-4. Run `uv run pytest` and `npm --prefix frontend test` before opening a pull request.
-5. A change that alters the database schema needs an Alembic migration (`uv run python -m flask --app backend/wsgi db migrate`); the migration test fails if migrations and models disagree.
-6. Never commit `.env` files, capture files (`*.pcap`, `*.pcapng`) or credentials; `.gitignore` already excludes them.
+There is no separate contributing policy in the repository; the following reflects how the code is organised.
+
+1. Create a branch and keep changes focused.
+2. Run `uv run pytest` and `npm --prefix frontend test` before submitting. Add tests alongside the code you change (`backend/tests/` and `frontend/tests/`).
+3. A schema change needs a new Alembic migration in `backend/migrations/versions/`; the migration test fails if migrations and ORM models disagree.
+4. Keep analytics definitions honest: when you add or change a metric, state its denominator and limitations next to it (see `services/analytics/engine.py`), and do not present a capture-derived indicator as proof.
+5. Never commit secrets, `.env` files or capture files.
+
+---
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+NetScope is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).

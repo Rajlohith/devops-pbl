@@ -1,0 +1,41 @@
+
+# Git
+.git/
+.gitignore
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local data and uploaded captures
+instance/
+*.pcap
+*.pcapng
+*.cap
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Build and temporary files
+*.log
+npm-debug.log*
+.env.local
+.env.*.local
