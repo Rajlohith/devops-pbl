@@ -14,13 +14,20 @@ from pydantic import (
 
 _RECOGNIZED_TRANSPORT_PROTOCOLS = {
     1: "ICMP",
+    2: "IGMP",
     6: "TCP",
     17: "UDP",
     47: "GRE",
     50: "ESP",
     51: "AH",
     58: "ICMPv6",
+    88: "EIGRP",
+    89: "OSPF",
+    103: "PIM",
+    112: "VRRP",
+    115: "L2TP",
     132: "SCTP",
+    136: "UDPLite",
 }
 _MAC_ADDRESS_PATTERN = re.compile(
     r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"

@@ -119,3 +119,41 @@ export function compareBytesBar(protocols) {
     },
   }
 }
+
+/**
+ * Grouped bytes-per-transport-protocol bars for A, B and any extra captures.
+ * `result` is a comparison with `protocols` (A vs B) and `others` (A vs C, A vs D, ...).
+ */
+export function compareBytesBarMulti(result) {
+  const series = [
+    { letter: 'A', bytes: new Map() },
+    { letter: 'B', bytes: new Map() },
+    ...(result.others ?? []).map((_, i) => ({ letter: 'CDE'[i], bytes: new Map() })),
+  ]
+  const labels = []
+  const add = (rows, a, b) => {
+    for (const row of rows) {
+      if (!labels.includes(row.protocol)) labels.push(row.protocol)
+      if (a && row.a) a.bytes.set(row.protocol, row.a.bytes)
+      if (row.b) b.bytes.set(row.protocol, row.b.bytes)
+    }
+  }
+  add(result.protocols, series[0], series[1])
+  ;(result.others ?? []).forEach((other, i) => add(other.protocols, null, series[2 + i]))
+  const colors = [PALETTE[0], PALETTE[2], ...PALETTE.slice(3)]
+  return {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: series.map((s, i) => ({
+        label: s.letter,
+        data: labels.map((l) => s.bytes.get(l) ?? 0),
+        backgroundColor: colors[i % colors.length],
+      })),
+    },
+    options: {
+      plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${bytes(c.parsed.y)}` } } },
+      scales: { y: bytesAxis },
+    },
+  }
+}

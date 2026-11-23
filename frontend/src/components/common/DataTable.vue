@@ -3,6 +3,8 @@
  * A simple, accessible table. Columns are `{ key, label, align?: 'right' }`.
  * Customise a cell with a `#cell-<key>="{ row }"` slot; otherwise `row[key]` is shown.
  * With `clickable`, rows are focusable and activate on click or Enter/Space.
+ * Wide tables: `scroll` keeps every column at its natural width (the wrapper scrolls
+ * horizontally) and a column with `sticky: true` stays visible while scrolling.
  */
 defineProps({
   columns: { type: Array, required: true },
@@ -12,6 +14,7 @@ defineProps({
   clickable: { type: Boolean, default: false },
   selectedKey: { type: [String, Number], default: null },
   monospace: { type: Boolean, default: false },
+  scroll: { type: Boolean, default: false },
 })
 defineEmits(['row-click'])
 
@@ -20,7 +23,10 @@ const keyOf = (row, rowKey) => (typeof rowKey === 'function' ? rowKey(row) : row
 
 <template>
   <div class="overflow-x-auto">
-    <table class="w-full text-left text-sm" :class="monospace ? 'font-mono text-xs' : ''">
+    <table
+      class="w-full text-left text-sm"
+      :class="[monospace ? 'font-mono text-xs' : '', scroll ? 'min-w-max whitespace-nowrap' : '']"
+    >
       <caption v-if="caption" class="sr-only">{{ caption }}</caption>
       <thead class="bg-slate-50">
         <tr>
@@ -29,7 +35,7 @@ const keyOf = (row, rowKey) => (typeof rowKey === 'function' ? rowKey(row) : row
             :key="column.key"
             scope="col"
             class="th"
-            :class="column.align === 'right' ? 'text-right' : ''"
+            :class="[column.align === 'right' ? 'text-right' : '', column.sticky ? 'sticky left-0 z-10 bg-slate-50' : '']"
           >
             {{ column.label }}
           </th>
@@ -54,7 +60,7 @@ const keyOf = (row, rowKey) => (typeof rowKey === 'function' ? rowKey(row) : row
             v-for="column in columns"
             :key="column.key"
             class="td"
-            :class="column.align === 'right' ? 'text-right' : ''"
+            :class="[column.align === 'right' ? 'text-right' : '', column.sticky ? 'sticky left-0 z-10 bg-white' : '']"
           >
             <slot :name="`cell-${column.key}`" :row="row">{{ row[column.key] }}</slot>
           </td>

@@ -3,7 +3,10 @@ import { ref } from 'vue'
 import { dashboardApi } from '@/api/dashboard'
 import { useCapturesStore } from '@/stores/captures'
 
-/** Choose two completed captures and compare them. */
+/**
+ * Choose completed captures and compare them. Capture A is the baseline; B and any extra
+ * captures (C, D, E) are each compared against A, one `/compare` request apiece.
+ */
 export function useComparison() {
   const captures = useCapturesStore()
   const options = ref([])
@@ -26,8 +29,13 @@ export function useComparison() {
     }
   }
 
-  /** @returns {Promise<boolean>} whether a comparison is now shown */
-  async function compare(a, b) {
+  /**
+   * @param {string} a baseline capture
+   * @param {string} b second capture
+   * @param {string[]} [extras] further captures (empty slots are ignored)
+   * @returns {Promise<boolean>} whether a comparison is now shown
+   */
+  async function compare(a, b, extras = []) {
     error.value = ''
     result.value = null
     if (!a || !b) {
@@ -38,9 +46,18 @@ export function useComparison() {
       error.value = 'Choose two different captures to compare.'
       return false
     }
+    const more = extras.filter(Boolean)
+    if (new Set([a, b, ...more]).size !== 2 + more.length) {
+      error.value = 'Choose a different capture for each slot.'
+      return false
+    }
     comparing.value = true
     try {
-      result.value = await dashboardApi.compare(a, b)
+      const [first, ...others] = await Promise.all([
+        dashboardApi.compare(a, b),
+        ...more.map((id) => dashboardApi.compare(a, id)),
+      ])
+      result.value = { ...first, others }
       return true
     } catch (e) {
       error.value = e.message

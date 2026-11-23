@@ -11,7 +11,7 @@ import StatusSummary from '@/components/dashboard/StatusSummary.vue'
 import { usePolling } from '@/composables/usePolling'
 import { useDashboardStore } from '@/stores/dashboard'
 import { capturesBytesBar, protocolDoughnut } from '@/utils/charts'
-import { pct, SEVERITIES } from '@/utils/analytics'
+import { pct } from '@/utils/analytics'
 import { bytes, num } from '@/utils/format'
 
 const store = useDashboardStore()
@@ -97,7 +97,7 @@ onBeforeUnmount(poller.stop)
         :subtitle="`Pooled across your ${data.network_intelligence.captures_included} most recent analysed captures`"
         data-testid="network-intelligence"
       >
-        <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard
             label="TCP connection success"
             :value="pct(data.network_intelligence.tcp.success_rate)"
@@ -113,15 +113,9 @@ onBeforeUnmount(poller.stop)
             :value="pct(data.network_intelligence.resets.packet_rate, 2)"
             hint="RST packets / TCP packets"
           />
-          <StatCard
-            label="Anomaly findings"
-            :value="num(data.network_intelligence.anomalies.total)"
-            :hint="SEVERITIES.map((s) => `${data.network_intelligence.anomalies.by_severity[s]} ${s}`).join(' · ')"
-          />
         </div>
         <p class="mt-3 text-xs text-slate-500">
-          Rates are pooled from counts, not averaged; an em dash means nothing could be measured.
-          Retransmissions are indicators, not measured packet loss.
+          Rates are pooled from counts, not averaged. Retransmissions are indicators, not measured packet loss.
         </p>
       </AppCard>
 

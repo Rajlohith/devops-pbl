@@ -2,21 +2,19 @@ import { Chart } from 'chart.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/errors'
-import CaptureAnomaliesView from '@/views/CaptureAnomaliesView.vue'
-import CaptureDiagnosticsView from '@/views/CaptureDiagnosticsView.vue'
 import CaptureDnsView from '@/views/CaptureDnsView.vue'
 import CaptureTcpView from '@/views/CaptureTcpView.vue'
 import CaptureTrafficView from '@/views/CaptureTrafficView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 
-import { analyticsDoc, connection, dnsTxn, finding, listPage } from '../analytics-fixtures'
+import { analyticsDoc, connection, dnsTxn, listPage } from '../analytics-fixtures'
 import { dashboard } from '../fixtures'
 import { ID, mountAt, settle, text } from '../helpers'
 
 vi.mock('@/api/analytics', () => ({
   analyticsApi: {
-    document: vi.fn(), connections: vi.fn(), connection: vi.fn(), indicators: vi.fn(), windows: vi.fn(),
-    dnsTransactions: vi.fn(), talkers: vi.fn(), direction: vi.fn(), anomalies: vi.fn(),
+    document: vi.fn(), connections: vi.fn(), connection: vi.fn(),
+    dnsTransactions: vi.fn(), talkers: vi.fn(), direction: vi.fn(),
   },
 }))
 vi.mock('@/api/dashboard', () => ({ dashboardApi: { overview: vi.fn(), compare: vi.fn() } }))
@@ -32,11 +30,8 @@ beforeEach(() => {
   analyticsApi.connections.mockResolvedValue(listPage([connection(), connection({ connection_id: 2, state: 'incomplete', incomplete_reason: 'no_synack', handshake_ms: null })]))
   analyticsApi.connection.mockResolvedValue({ connection: connection(), indicators: [] })
   analyticsApi.dnsTransactions.mockResolvedValue(listPage([dnsTxn(), dnsTxn({ transaction_id: 2, status: 'unanswered_indeterminate', latency_ms: null, rcode_name: null, rcode: null })]))
-  analyticsApi.indicators.mockResolvedValue(listPage([]))
-  analyticsApi.windows.mockResolvedValue({ windows: {}, zero_window_connections: [] })
   analyticsApi.talkers.mockResolvedValue({ items: [] })
   analyticsApi.direction.mockResolvedValue({ configured: false, directions: {}, rule: '' })
-  analyticsApi.anomalies.mockResolvedValue(listPage([finding()]))
 })
 
 describe('TCP connections tab', () => {
@@ -166,78 +161,6 @@ describe('Traffic tab', () => {
   })
 })
 
-describe('TCP diagnostics tab', () => {
-  it('never presents indicators as measured packet loss', async () => {
-    const { wrapper } = await mountAt(CaptureDiagnosticsView, `/captures/${ID}/diagnostics`)
-    expect(stat(wrapper, 'Packet loss')).toBe('Not measurable')
-    expect(wrapper.get('[data-testid="loss-disclaimer"]').text()).toContain('not measured packet loss')
-    expect(stat(wrapper, 'Retransmissions')).toBe('2')
-    expect(stat(wrapper, 'Duplicate ACKs')).toBe('3')
-    expect(stat(wrapper, 'Largest effective window')).toBe('Unknown')
-  })
-
-  it('shows evidence for a clicked indicator', async () => {
-    analyticsApi.indicators.mockResolvedValue(listPage([{
-      indicator_id: 1, connection_id: 1, flow_id: 3, endpoint_a: '10.0.0.1:1', endpoint_b: '10.0.0.2:80',
-      type: 'duplicate_ack', sender: 'b', packet_count: 3, first_packet: 7, last_packet: 9, severity: 'medium',
-      confidence: 'medium', evidence: [{ packet: 7, ack: 201, run: 1 }], detail: { max_run: 3 },
-    }]))
-    const { wrapper } = await mountAt(CaptureDiagnosticsView, `/captures/${ID}/diagnostics`)
-    await wrapper.get('tbody tr').trigger('click')
-    expect(wrapper.get('[data-testid="indicator-detail"]').text()).toContain('packet=7')
-    expect(wrapper.find('[data-severity="medium"]').exists()).toBe(true)
-  })
-
-  it('reports raw windows without inventing an effective size when scaling is unknown', async () => {
-    analyticsApi.windows.mockResolvedValue({
-      windows: {},
-      zero_window_connections: [connection({
-        window_scaling: 'unknown_handshake_not_observed',
-        window: {
-          scaling: 'unknown_handshake_not_observed',
-          a: { samples: 2, effective: null, raw: { min: 10, max: 100, last: 50 }, zero_window_evidence: [] },
-          b: { samples: 1, effective: null, raw: { min: 0, max: 0, last: 0 }, zero_window_evidence: [9] },
-        },
-      })],
-    })
-    const { wrapper } = await mountAt(CaptureDiagnosticsView, `/captures/${ID}/diagnostics`)
-    expect(wrapper.text()).toContain('raw, scale unknown')
-  })
-})
-
-describe('Anomaly tab', () => {
-  it('states the heuristic disclaimer and the severity counts', async () => {
-    const { wrapper } = await mountAt(CaptureAnomaliesView, `/captures/${ID}/anomalies`)
-    expect(wrapper.get('[data-testid="anomaly-disclaimer"]').text()).toContain('not proof of malicious activity')
-    expect(stat(wrapper, 'Findings')).toBe('3')
-    expect(stat(wrapper, 'medium severity')).toBe('2')
-  })
-
-  it('shows rule, reason, evidence, thresholds and packet references for a finding', async () => {
-    const { wrapper } = await mountAt(CaptureAnomaliesView, `/captures/${ID}/anomalies`)
-    await wrapper.get('tbody tr').trigger('click')
-    const detail = wrapper.get('[data-testid="anomaly-detail"]').text()
-    expect(detail).toContain('25 distinct TCP ports')
-    expect(detail).toContain('port_scan_distinct_ports = 20')
-    expect(detail).toContain('21, 22')
-    expect(detail).toContain('does not prove malicious activity')
-  })
-
-  it('filters by severity', async () => {
-    const { wrapper } = await mountAt(CaptureAnomaliesView, `/captures/${ID}/anomalies`)
-    await wrapper.get('[data-filter="severity"]').setValue('high')
-    await wrapper.get('form [data-action="apply"]').trigger('submit')
-    await settle()
-    expect(analyticsApi.anomalies).toHaveBeenLastCalledWith(ID, expect.objectContaining({ severity: 'high' }))
-  })
-
-  it('shows an empty state when nothing triggered', async () => {
-    analyticsApi.anomalies.mockResolvedValue(listPage([]))
-    const { wrapper } = await mountAt(CaptureAnomaliesView, `/captures/${ID}/anomalies`)
-    expect(wrapper.find('[data-state="empty"]').exists()).toBe(true)
-  })
-})
-
 describe('Dashboard network intelligence', () => {
   const intel = {
     captures_included: 2,
@@ -252,7 +175,8 @@ describe('Dashboard network intelligence', () => {
     dashboardApi.overview.mockResolvedValue(dashboard({ network_intelligence: intel }))
     const { wrapper } = await mountAt(DashboardView, '/dashboard')
     expect(stat(wrapper, 'TCP connection success')).toBe('80.0%')
-    expect(stat(wrapper, 'Anomaly findings')).toBe('3')
+    expect(wrapper.text()).not.toContain('Anomaly findings') // that card was removed
+    expect(stat(wrapper, 'TCP reset rate')).toBe('1.00%')
   })
 
   it('shows nothing extra when no capture has advanced analytics', async () => {

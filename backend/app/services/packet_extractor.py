@@ -22,6 +22,7 @@ from scapy.layers.l2 import ARP, Dot1Q, Ether
 from scapy.packet import Raw
 
 from app.models.packet import _RECOGNIZED_TRANSPORT_PROTOCOLS, Packet, TransportProtocol
+from app.services.protocol_detector import L2_ETHERTYPES, detect_tcp, detect_udp
 
 _IPV6_EXT_HEADERS = (
     IPv6ExtHdrHopByHop,
@@ -155,6 +156,8 @@ def _extract(pkt, number: int, capture_id: UUID) -> ExtractedPacket:
     if ip_layer is None:
         if ether_type == _ETHERTYPE_ARP and pkt.haslayer(ARP):
             label = "ARP"
+        elif ether_type in L2_ETHERTYPES:
+            label = L2_ETHERTYPES[ether_type]  # LLDP, EAPOL, PPPoE, MPLS, ...
         elif ether_type in (_ETHERTYPE_IPV4, _ETHERTYPE_IPV6):
             malformed = "truncated_ip_header"
         elif isinstance(pkt, Raw):  # the reader's fallback when a frame cannot be dissected
@@ -203,7 +206,7 @@ def _extract(pkt, number: int, capture_id: UUID) -> ExtractedPacket:
         payload_length = _tcp_payload_length(ip_layer, transport)
         tcp_window = int(transport.window)
         tcp_window_scale = _window_scale(transport)
-        app, metadata = _tcp_application(transport)
+        app, metadata = _tcp_application(transport, payload_length)
     elif isinstance(transport, UDP):
         fields.update(
             source_port=int(transport.sport),
@@ -289,20 +292,31 @@ def _tcp_payload_length(ip_layer, tcp) -> int:
 def _udp_application(udp) -> tuple[str | None, dict | None]:
     if isinstance(udp.payload, DNS):
         return "DNS", _dns_metadata(udp.payload)
-    return None, None
+    try:
+        data = bytes(udp.payload)
+        if udp.len is not None:  # drop Ethernet padding after the UDP datagram
+            data = data[: max(int(udp.len) - 8, 0)]
+        return detect_udp(int(udp.sport), int(udp.dport), data) or (None, None)
+    except Exception:  # noqa: BLE001 - identification is best effort
+        return None, None
 
 
-def _tcp_application(tcp) -> tuple[str | None, dict | None]:
+def _tcp_application(tcp, payload_length: int | None = None) -> tuple[str | None, dict | None]:
     payload = tcp.payload
     if isinstance(payload, DNS):  # Scapy handles the 2-byte length prefix and checks it
         return "DNS", _dns_metadata(payload)
-    if not isinstance(payload, Raw):
+    try:
+        data = bytes(payload)
+        if payload_length is not None:  # never classify Ethernet padding as payload
+            data = data[:payload_length]
+        if not data:
+            return None, None
+        if isinstance(payload, Raw) and data.startswith(_HTTP_PREFIXES):
+            line = data.split(b"\r\n", 1)[0][:200].decode("latin-1")
+            return "HTTP", {"start_line": line}
+        return detect_tcp(int(tcp.sport), int(tcp.dport), data) or (None, None)
+    except Exception:  # noqa: BLE001 - identification is best effort
         return None, None
-    data = bytes(payload.load)
-    if data.startswith(_HTTP_PREFIXES):
-        line = data.split(b"\r\n", 1)[0][:200].decode("latin-1")
-        return "HTTP", {"start_line": line}
-    return None, None
 
 
 def _dns_metadata(dns) -> dict:

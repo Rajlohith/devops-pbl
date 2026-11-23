@@ -1,7 +1,0 @@
-{% extends "base.html" %}
-{% block title %}{{ capture.original_filename }} · NetScope{% endblock %}
-{% block content %}
-<a href="{{ url_for('web.captures') }}" class="text-sm text-blue-700 hover:underline">&larr; All captures</a>
-<div id="capture-root" class="mt-3" data-capture-id="{{ capture.id }}"></div>
-{% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='js/capture.js') }}"></script>{% endblock %}

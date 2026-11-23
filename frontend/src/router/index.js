@@ -99,16 +99,6 @@ export const routes = [
             name: 'capture-traffic',
             component: () => import('@/views/CaptureTrafficView.vue'),
           },
-          {
-            path: 'diagnostics',
-            name: 'capture-diagnostics',
-            component: () => import('@/views/CaptureDiagnosticsView.vue'),
-          },
-          {
-            path: 'anomalies',
-            name: 'capture-anomalies',
-            component: () => import('@/views/CaptureAnomaliesView.vue'),
-          },
         ],
       },
       {

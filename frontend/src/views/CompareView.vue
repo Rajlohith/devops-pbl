@@ -7,26 +7,61 @@ import AppCard from '@/components/common/AppCard.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import StateBlock from '@/components/common/StateBlock.vue'
 import { useComparison } from '@/composables/useComparison'
-import { compareBytesBar } from '@/utils/charts'
-import { byUnit, dateTime, DASH, num, signed, signedPercent } from '@/utils/format'
+import { compareBytesBar, compareBytesBarMulti } from '@/utils/charts'
+import { byUnit, dateTime, num, signed, signedPercent } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
 const cmp = useComparison()
 
+const LETTERS = ['C', 'D', 'E'] // up to three extra captures after A and B
 const a = ref(String(route.query.a ?? ''))
 const b = ref(String(route.query.b ?? ''))
+const extras = ref(LETTERS.map((_, i) => route.query[LETTERS[i].toLowerCase()]).filter(Boolean).map(String))
+const canAdd = computed(() => extras.value.length < LETTERS.length)
 
-const columns = computed(() => [
-  { key: 'label', label: 'Metric' },
-  { key: 'a', label: `A — ${cmp.result.value.a.filename}`, align: 'right' },
-  { key: 'b', label: `B — ${cmp.result.value.b.filename}`, align: 'right' },
-  { key: 'delta', label: 'Change (B − A)', align: 'right' },
-  { key: 'delta_percent', label: '%', align: 'right' },
-])
+const others = computed(() => cmp.result.value?.others ?? [])
+const columns = computed(() => {
+  const result = cmp.result.value
+  const cols = [
+    { key: 'label', label: 'Metric', sticky: true },
+    { key: 'a', label: `A — ${result.a.filename}`, align: 'right' },
+    { key: 'b', label: `B — ${result.b.filename}`, align: 'right' },
+    { key: 'delta', label: 'Change (B − A)', align: 'right' },
+    { key: 'delta_percent', label: '%', align: 'right' },
+  ]
+  others.value.forEach((other, i) => {
+    const letter = LETTERS[i]
+    cols.push(
+      { key: `x${i}`, label: `${letter} — ${other.b.filename}`, align: 'right' },
+      { key: `x${i}_delta`, label: `Change (${letter} − A)`, align: 'right' },
+      { key: `x${i}_pct`, label: '%', align: 'right' },
+    )
+  })
+  return cols
+})
+// Slot names for the C/D/E columns (kept as plain strings so the template needs no expressions).
+const extraCols = computed(() =>
+  others.value.map((_, i) => ({
+    i,
+    letter: LETTERS[i].toLowerCase(),
+    value: `cell-x${i}`,
+    delta: `cell-x${i}_delta`,
+    pct: `cell-x${i}_pct`,
+  })),
+)
+// One row per metric; `extra[i]` is the same metric measured against capture C, D or E.
+const rows = computed(() =>
+  cmp.result.value.metrics.map((metric, index) => ({
+    ...metric,
+    extra: others.value.map((other) => other.metrics[index]),
+  })),
+)
 const chart = computed(() => {
-  const rows = cmp.result.value?.protocols ?? []
-  return rows.length ? compareBytesBar(rows) : null
+  const result = cmp.result.value
+  if (!result?.protocols.length && !others.value.length) return null
+  if (others.value.length) return compareBytesBarMulti(result)
+  return result.protocols.length ? compareBytesBar(result.protocols) : null
 })
 const overlaps = computed(() => {
   const ips = cmp.result.value.ips
@@ -38,12 +73,26 @@ const overlaps = computed(() => {
 })
 
 async function run() {
-  // Keep the chosen pair in the URL so the comparison can be bookmarked or shared.
+  // Keep the chosen captures in the URL so the comparison can be bookmarked or shared.
   if (a.value && b.value && a.value !== b.value) {
-    router.replace({ query: { a: a.value, b: b.value } })
+    const query = { a: a.value, b: b.value }
+    extras.value.forEach((id, i) => {
+      if (id) query[LETTERS[i].toLowerCase()] = id
+    })
+    router.replace({ query })
   }
-  await cmp.compare(a.value, b.value)
+  await cmp.compare(a.value, b.value, extras.value)
 }
+
+function switchAB() {
+  ;[a.value, b.value] = [b.value, a.value]
+  if (cmp.result.value && a.value && b.value) run() // keep a shown table in step with the selection
+}
+
+const addCapture = () => {
+  if (canAdd.value) extras.value.push('')
+}
+const removeCapture = (index) => extras.value.splice(index, 1)
 
 onMounted(async () => {
   await cmp.loadOptions()
@@ -57,7 +106,7 @@ const label = (c) => `${c.original_filename} — ${dateTime(c.uploaded_at)}`
   <div class="space-y-6">
     <div>
       <h2 class="text-lg font-semibold text-slate-900">Compare captures</h2>
-      <p class="mt-1 text-slate-500">See how two analysed captures differ.</p>
+      <p class="mt-1 text-slate-500">Compare two analysed captures, or add up to three more (C, D, E) against the baseline A.</p>
     </div>
 
     <AppCard v-if="cmp.optionsState.value === 'loading'" flush>
@@ -75,24 +124,63 @@ const label = (c) => `${c.original_filename} — ${dateTime(c.uploaded_at)}`
 
     <template v-else>
       <AppCard>
-        <form class="grid items-end gap-3 md:grid-cols-3" @submit.prevent="run">
-          <div>
-            <label class="label" for="cmp-a">Capture A (baseline)</label>
-            <select id="cmp-a" v-model="a" class="field">
-              <option value="">Choose a capture…</option>
-              <option v-for="c in cmp.options.value" :key="c.id" :value="c.id">{{ label(c) }}</option>
-            </select>
+        <form class="space-y-4" @submit.prevent="run">
+          <div class="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label class="label" for="cmp-a">Capture A (baseline)</label>
+              <select id="cmp-a" v-model="a" class="field">
+                <option value="">Choose a capture…</option>
+                <option v-for="c in cmp.options.value" :key="c.id" :value="c.id">{{ label(c) }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="label" for="cmp-b">Capture B</label>
+              <select id="cmp-b" v-model="b" class="field">
+                <option value="">Choose a capture…</option>
+                <option v-for="c in cmp.options.value" :key="c.id" :value="c.id">{{ label(c) }}</option>
+              </select>
+            </div>
+            <div v-for="(_, i) in extras" :key="i">
+              <label class="label" :for="`cmp-${LETTERS[i].toLowerCase()}`">Capture {{ LETTERS[i] }}</label>
+              <div class="flex gap-2">
+                <select :id="`cmp-${LETTERS[i].toLowerCase()}`" v-model="extras[i]" class="field">
+                  <option value="">Choose a capture…</option>
+                  <option v-for="c in cmp.options.value" :key="c.id" :value="c.id">{{ label(c) }}</option>
+                </select>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  :aria-label="`Remove capture ${LETTERS[i]}`"
+                  :data-remove="LETTERS[i]"
+                  @click="removeCapture(i)"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
           </div>
-          <div>
-            <label class="label" for="cmp-b">Capture B</label>
-            <select id="cmp-b" v-model="b" class="field">
-              <option value="">Choose a capture…</option>
-              <option v-for="c in cmp.options.value" :key="c.id" :value="c.id">{{ label(c) }}</option>
-            </select>
-          </div>
-          <div>
+          <div class="flex flex-wrap items-center gap-3">
             <button id="compare-btn" type="submit" class="btn btn-primary" :disabled="cmp.comparing.value">
               {{ cmp.comparing.value ? 'Comparing…' : 'Compare' }}
+            </button>
+            <button
+              id="switch-btn"
+              type="button"
+              class="btn btn-secondary"
+              title="Swap captures A and B"
+              @click="switchAB"
+            >
+              ⇄ Switch
+            </button>
+            <button
+              v-if="canAdd"
+              id="add-capture-btn"
+              type="button"
+              class="btn btn-secondary"
+              :aria-label="`Add capture ${LETTERS[extras.length]}`"
+              @click="addCapture"
+            >
+              + Add capture {{ LETTERS[extras.length] }}
             </button>
           </div>
         </form>
@@ -103,28 +191,39 @@ const label = (c) => `${c.original_filename} — ${dateTime(c.uploaded_at)}`
         <StateBlock v-else-if="cmp.error.value" kind="error" :message="cmp.error.value" :retryable="false" />
         <div v-else-if="cmp.result.value" class="space-y-4">
           <AppCard flush>
-            <DataTable :columns="columns" :rows="cmp.result.value.metrics" row-key="key" caption="Metric comparison">
+            <DataTable
+              :columns="columns"
+              :rows="rows"
+              row-key="key"
+              caption="Metric comparison"
+              scroll
+            >
               <template #cell-a="{ row }"><span :data-cell="`${row.key}-a`">{{ byUnit(row.a, row.unit) }}</span></template>
               <template #cell-b="{ row }"><span :data-cell="`${row.key}-b`">{{ byUnit(row.b, row.unit) }}</span></template>
               <template #cell-delta="{ row }">
                 <span :data-cell="`${row.key}-delta`">{{ signed(row.delta, row.unit) }}</span>
               </template>
               <template #cell-delta_percent="{ row }">{{ signedPercent(row.delta_percent) }}</template>
+              <template v-for="col in extraCols" :key="col.value" #[col.value]="{ row }">
+                <span :data-cell="`${row.key}-${col.letter}`">{{ byUnit(row.extra[col.i].b, row.unit) }}</span>
+              </template>
+              <template v-for="col in extraCols" :key="col.delta" #[col.delta]="{ row }">
+                <span :data-cell="`${row.key}-${col.letter}-delta`">{{ signed(row.extra[col.i].delta, row.unit) }}</span>
+              </template>
+              <template v-for="col in extraCols" :key="col.pct" #[col.pct]="{ row }">
+                {{ signedPercent(row.extra[col.i].delta_percent) }}
+              </template>
             </DataTable>
           </AppCard>
-          <p class="text-xs text-slate-500">
-            A dash ({{ DASH }}) means the value is not available for that capture (for example, no TCP
-            handshake was captured).
-          </p>
 
           <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <ChartCard
               title="Bytes by transport protocol"
               :config="chart"
-              aria-label="Grouped bar chart of bytes per transport protocol for captures A and B"
+              aria-label="Grouped bar chart of bytes per transport protocol for the compared captures"
               empty-text="No protocol data."
             />
-            <AppCard title="IP address overlap">
+            <AppCard title="IP address overlap" :subtitle="others.length ? 'Capture A against capture B' : ''">
               <div class="space-y-2">
                 <details
                   v-for="group in overlaps"

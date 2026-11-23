@@ -66,7 +66,7 @@ def test_pipeline_persists_derived_metrics_and_packet_windows(app, capture_id):
 
 def test_phase_one_to_three_results_are_unchanged(auth_client, capture_id):
     summary = body(auth_client, capture_id, "/summary")
-    assert summary["totals"]["packets"] == len(build_packets())
+    assert summary["totals"]["total_packets"] == len(build_packets())
 
 
 # --------------------------------------------------------------------- TCP
@@ -232,8 +232,9 @@ def test_anomaly_findings_are_explained_and_filterable(auth_client, capture_id):
 
 
 @pytest.mark.parametrize("path", ENDPOINTS)
-def test_endpoints_require_authentication(client, capture_id, path):
-    assert api(client, capture_id, path).status_code == 401
+def test_endpoints_require_authentication(make_client, capture_id, path):
+    # `capture_id` logs the shared `client` in, so use a brand-new client with no session.
+    assert api(make_client(), capture_id, path).status_code == 401
 
 
 @pytest.mark.parametrize("path", ENDPOINTS)

@@ -30,7 +30,7 @@ def test_window_fields_are_ipv6_aware_and_absent_for_udp():
 
 def test_dns_details_support_matching_and_multiple_questions():
     query = extract(Ether() / IP() / UDP(sport=5000, dport=53)
-                    / DNS(id=77, rd=1, qd=DNSQR(qname="a.test") / DNSQR(qname="b.test", qtype="AAAA")))
+                    / DNS(id=77, rd=1, qd=[DNSQR(qname="a.test"), DNSQR(qname="b.test", qtype="AAAA")]))
     assert query.dns["id"] == 77 and query.dns["is_response"] is False
     assert [q["name"] for q in query.dns["questions"]] == ["a.test", "b.test"]
     assert [q["type"] for q in query.dns["questions"]] == [1, 28]
@@ -48,3 +48,42 @@ def test_existing_dns_metadata_is_unchanged():
 
 def test_non_dns_packets_carry_no_dns_details():
     assert _tcp("A").dns is None
+
+
+# ---- wider application-protocol identification (rules themselves: test_protocol_detector.py)
+from scapy.all import Raw  # noqa: E402
+
+from tests.test_protocol_detector import client_hello  # noqa: E402
+
+
+def test_tls_is_identified_with_sni_on_any_port():
+    ex = extract(Ether() / IP() / TCP(sport=50000, dport=8443, flags="PA") / Raw(client_hello(b"example.org")))
+    assert ex.packet.application_protocol == "TLS" and ex.label == "TLS"
+    assert ex.packet.application_metadata["sni"] == "example.org"
+
+
+def test_ssh_banner_and_port_only_services():
+    ssh = extract(Ether() / IP() / TCP(dport=2222, flags="PA") / Raw(b"SSH-2.0-OpenSSH_9.6\r\n"))
+    assert ssh.packet.application_protocol == "SSH"
+    mysql = extract(Ether() / IP() / TCP(dport=3306, flags="PA") / Raw(b"\x01\x02\x03"))
+    assert mysql.packet.application_protocol == "MySQL"
+    assert mysql.packet.application_metadata == {"detected_by": "port"}
+
+
+def test_bare_handshake_packets_are_not_labelled_from_the_port():
+    ex = extract(Ether() / IP() / TCP(dport=22, flags="S"))
+    assert ex.packet.application_protocol is None and ex.label == "TCP"
+
+
+def test_udp_protocols():
+    quic = extract(Ether() / IP() / UDP(sport=50000, dport=443) / Raw(b"\xc3\x00\x00\x00\x01\x08" + b"\x00" * 30))
+    assert quic.packet.application_protocol == "QUIC"
+    ntp = extract(Ether() / IP() / UDP(sport=40000, dport=123) / Raw(b"\x1b" + b"\x00" * 47))
+    assert ntp.packet.application_protocol == "NTP"
+
+
+def test_more_ip_protocols_and_layer2_protocols_get_names():
+    assert extract(Ether() / IP(proto=89)).label == "OSPF"
+    assert extract(Ether() / IP(proto=2)).label == "IGMP"
+    assert extract(Ether(type=0x88CC) / Raw(b"\x02\x07lldp")).label == "LLDP"
+    assert extract(Ether(type=0x888E) / Raw(b"\x01\x00\x00\x00")).label == "EAPOL"

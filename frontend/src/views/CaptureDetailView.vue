@@ -49,8 +49,6 @@ const intelligenceTabs = computed(() => {
     { label: 'TCP Connections', to: { name: 'capture-tcp', params } },
     { label: 'DNS Analytics', to: { name: 'capture-dns', params } },
     { label: 'Traffic Intelligence', to: { name: 'capture-traffic', params } },
-    { label: 'TCP Diagnostics', to: { name: 'capture-diagnostics', params } },
-    { label: 'Anomaly Detection', to: { name: 'capture-anomalies', params } },
   ]
 })
 
