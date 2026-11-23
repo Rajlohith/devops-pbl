@@ -29,3 +29,6 @@ instance/
 
 # Node
 node_modules/
+
+# Locust virtual environment
+.venv-locust/
