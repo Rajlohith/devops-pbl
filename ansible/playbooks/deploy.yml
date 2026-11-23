@@ -1,0 +1,194 @@
+---
+- name: Deploy NetScope on Minikube
+  hosts: local
+  gather_facts: false
+
+  vars:
+    rerun_migrations: false
+    repo_root: "{{ playbook_dir | dirname | dirname }}"
+
+  tasks:
+    - name: Apply namespace
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/namespace.yaml"
+      register: namespace_apply
+      changed_when: "'created' in namespace_apply.stdout or 'configured' in namespace_apply.stdout"
+
+    - name: Apply ConfigMap
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/configmap.yaml"
+      register: configmap_apply
+      changed_when: "'created' in configmap_apply.stdout or 'configured' in configmap_apply.stdout"
+
+    - name: Apply upload storage configuration
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/storage.yaml"
+      register: storage_apply
+      changed_when: "'created' in storage_apply.stdout or 'configured' in storage_apply.stdout"
+
+    - name: Apply PostgreSQL
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/postgres.yaml"
+      register: postgres_apply
+      changed_when: "'created' in postgres_apply.stdout or 'configured' in postgres_apply.stdout"
+
+    - name: Apply Valkey
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/valkey.yaml"
+      register: valkey_apply
+      changed_when: "'created' in valkey_apply.stdout or 'configured' in valkey_apply.stdout"
+
+    - name: Wait for PostgreSQL
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - statefulset/postgres
+          - -n
+          - netscope
+          - --timeout=180s
+      changed_when: false
+
+    - name: Wait for Valkey
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - deployment/valkey
+          - -n
+          - netscope
+          - --timeout=120s
+      changed_when: false
+
+    - name: Check existing migration Job
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - job
+          - netscope-migration
+          - -n
+          - netscope
+          - -o
+          - "jsonpath={.status.succeeded}"
+      register: migration_job
+      failed_when: migration_job.rc != 0 and 'NotFound' not in migration_job.stderr
+      changed_when: false
+
+    - name: Remove incomplete or explicitly requested migration Job
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - job
+          - netscope-migration
+          - -n
+          - netscope
+      when:
+        - migration_job.rc == 0
+        - migration_job.stdout != "1" or rerun_migrations | bool
+      changed_when: true
+
+    - name: Apply database migration Job
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/migration.yaml"
+      when: migration_job.rc != 0 or migration_job.stdout != "1" or rerun_migrations | bool
+      register: migration_apply
+      changed_when: "'created' in migration_apply.stdout or 'configured' in migration_apply.stdout"
+
+    - name: Wait for database migration
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - wait
+          - --for=condition=complete
+          - job/netscope-migration
+          - -n
+          - netscope
+          - --timeout=180s
+      when: migration_job.rc != 0 or migration_job.stdout != "1" or rerun_migrations | bool
+      changed_when: false
+
+    - name: Apply web Deployment and Service
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/web.yaml"
+      register: web_apply
+      changed_when: "'created' in web_apply.stdout or 'configured' in web_apply.stdout"
+
+    - name: Apply worker Deployment
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/worker.yaml"
+      register: worker_apply
+      changed_when: "'created' in worker_apply.stdout or 'configured' in worker_apply.stdout"
+
+    - name: Apply HPA
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ repo_root }}/k8s/hpa.yaml"
+      register: hpa_apply
+      changed_when: "'created' in hpa_apply.stdout or 'configured' in hpa_apply.stdout"
+
+    - name: Wait for web deployment
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - deployment/netscope-web
+          - -n
+          - netscope
+          - --timeout=180s
+      changed_when: false
+
+    - name: Wait for worker deployment
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - deployment/netscope-worker
+          - -n
+          - netscope
+          - --timeout=180s
+      changed_when: false
+
+    - name: Display deployment result
+      ansible.builtin.debug:
+        msg: "NetScope deployment completed successfully."

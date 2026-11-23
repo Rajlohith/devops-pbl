@@ -1,0 +1,73 @@
+---
+- name: Verify NetScope Kubernetes deployment
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Verify application workloads and services
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - deployments,statefulsets,pods,services
+          - -n
+          - netscope
+      register: workload_status
+      changed_when: false
+
+    - name: Verify persistent storage
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - pvc
+          - -n
+          - netscope
+      register: storage_status
+      changed_when: false
+
+    - name: Verify migration Job
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - jobs
+          - -n
+          - netscope
+      register: migration_status
+      changed_when: false
+
+    - name: Verify HPA
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - hpa
+          - -n
+          - netscope
+      register: hpa_status
+      changed_when: false
+
+    - name: Verify pod resource metrics
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - top
+          - pods
+          - -n
+          - netscope
+      register: pod_metrics
+      changed_when: false
+
+    - name: Display verification results
+      ansible.builtin.debug:
+        msg:
+          - "{{ workload_status.stdout }}"
+          - "Persistent storage:"
+          - "{{ storage_status.stdout }}"
+          - "Migration:"
+          - "{{ migration_status.stdout }}"
+          - "Autoscaling:"
+          - "{{ hpa_status.stdout }}"
+          - "Resource metrics:"
+          - "{{ pod_metrics.stdout }}"

@@ -1,0 +1,97 @@
+---
+- name: Verify NetScope deployment prerequisites
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Check Minikube status
+      ansible.builtin.command:
+        argv:
+          - minikube
+          - status
+      register: minikube_status
+      changed_when: false
+
+    - name: Check Kubernetes context
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - config
+          - current-context
+      register: kube_context
+      changed_when: false
+
+    - name: Check Kubernetes node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - nodes
+      register: kube_nodes
+      changed_when: false
+
+    - name: Verify Ansible installation
+      ansible.builtin.command:
+        argv:
+          - ansible
+          - --version
+      changed_when: false
+
+    - name: Verify kubectl client
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - version
+          - --client
+      changed_when: false
+
+    - name: Verify existing namespace
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - namespace
+          - netscope
+      changed_when: false
+
+    - name: Verify existing Kubernetes Secret
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - secret
+          - netscope-secrets
+          - -n
+          - netscope
+          - -o
+          - name
+      register: netscope_secret
+      changed_when: false
+
+    - name: Verify existing persistent claims
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - pvc
+          - postgres-data-postgres-0
+          - uploads-pvc
+          - -n
+          - netscope
+      register: existing_pvcs
+      changed_when: false
+
+    - name: Validate Kubernetes context
+      ansible.builtin.assert:
+        that:
+          - kube_context.stdout == "minikube"
+        fail_msg: "Expected Minikube context. Stopping deployment."
+
+    - name: Display prerequisite results
+      ansible.builtin.debug:
+        msg:
+          - "Minikube is running."
+          - "Kubernetes context: {{ kube_context.stdout }}"
+          - "NetScope namespace exists."
+          - "Existing Secret is present."
+          - "Existing PVCs are present."

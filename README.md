@@ -1069,8 +1069,6 @@ There is no separate contributing policy in the repository; the following reflec
 4. Keep analytics definitions honest: when you add or change a metric, state its denominator and limitations next to it (see `services/analytics/engine.py`), and do not present a capture-derived indicator as proof.
 5. Never commit secrets, `.env` files or capture files.
 
----
-
 ## License
 
 NetScope is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
