@@ -48,6 +48,12 @@ NetScope analyses **capture files that users upload** (PCAP and PCAPNG). It does
   - [Stop the services](#stop-the-services)
   - [Persistent data](#persistent-data)
   - [Troubleshooting](#troubleshooting)
+- [Kubernetes Deployment](#kubernetes-deployment)
+  - [Cluster architecture](#cluster-architecture)
+  - [Quick start](#quick-start)
+  - [Autoscaling and load testing](#autoscaling-and-load-testing)
+  - [Kubernetes scope and limits](#kubernetes-scope-and-limits)
+- [Ansible Automation](#ansible-automation)
 - [Configuration Reference](#configuration-reference)
 - [API Reference](#api-reference)
 - [Testing and Validation](#testing-and-validation)
@@ -475,6 +481,10 @@ netscope/
 ├── compose.yaml              # Docker Compose stack: db, redis, migrate, web, worker
 ├── .dockerignore             # Keeps secrets, captures and local files out of the build context
 ├── LICENSE                   # Apache License 2.0
+├── k8s/                      # Kubernetes manifests and deployment guide (see k8s/README.md)
+├── ansible/                  # Ansible playbooks that apply the manifests (see ansible/README.md)
+├── load-testing/
+│   └── locustfile.py         # Locust script used for the autoscaling test
 ├── backend/
 │   ├── wsgi.py               # Entry point for Flask (app) and Celery (celery_app)
 │   ├── app/
@@ -658,7 +668,7 @@ If `frontend/dist` is missing, Flask answers `503` with the build command instea
 
 ## Docker Deployment
 
-NetScope ships with a multi-stage `Dockerfile`, a `.dockerignore` and a `compose.yaml` that run the complete stack (database, broker, migrations, web application and worker) on a single machine. This is a **local Docker Compose deployment**; the repository does not describe any other deployment target.
+NetScope ships with a multi-stage `Dockerfile`, a `.dockerignore` and a `compose.yaml` that run the complete stack (database, broker, migrations, web application and worker) on a single machine. This is a **local Docker Compose deployment**. For running the same image on a Kubernetes cluster, see [Kubernetes Deployment](#kubernetes-deployment).
 
 ### Why Docker
 
@@ -869,6 +879,129 @@ Back up both volumes before deleting them if the data matters. Because the datab
 
 After fixing the cause, `docker compose up -d` recreates only what changed. If a service keeps restarting, `docker compose logs --tail=100 <service>` shows its most recent output.
 
+## Kubernetes Deployment
+
+The `k8s/` directory contains manifests that run the same stack on a Kubernetes cluster, in a dedicated `netscope` namespace. It was verified on a **single-node Minikube cluster (Docker driver)**. The application image is the `netscope:local` image built in the [Docker Deployment](#docker-deployment) section; the manifests use `imagePullPolicy: IfNotPresent`, so on Minikube you load the image with `minikube image load netscope:local` and no registry is needed.
+
+> **This section is a summary.** The complete step-by-step guide, including every manifest's settings, the end-to-end test script, the load-test results and a troubleshooting table, is in [`k8s/README.md`](k8s/README.md).
+
+| Manifest | Resources |
+|---|---|
+| `namespace.yaml` | Namespace `netscope`. |
+| `configmap.yaml` | Non-sensitive settings (`netscope-config`). |
+| `storage.yaml` | PersistentVolumeClaim `uploads-pvc` (2 GiB), shared by web and worker. |
+| `postgres.yaml` | PostgreSQL 16 StatefulSet and Service, with its own 2 GiB volume. |
+| `valkey.yaml` | Valkey 8 Deployment and Service (no persistent volume). |
+| `migration.yaml` | Job `netscope-migration` (runs `flask db upgrade` once). |
+| `web.yaml` | Deployment and ClusterIP Service for the Flask/Gunicorn app on port 8000. |
+| `worker.yaml` | Celery worker Deployment. |
+| `hpa.yaml` | HorizontalPodAutoscaler for the web Deployment. |
+
+The `netscope-secrets` Secret (`POSTGRES_PASSWORD`, `NETSCOPE_SECRET_KEY`) is deliberately **not** in the repository; you create it with `kubectl`.
+
+### Cluster architecture
+
+```mermaid
+flowchart LR
+    USER["kubectl port-forward"] --> WEBSVC["Service netscope-web :8000"]
+
+    subgraph NS["Namespace netscope"]
+        WEBSVC --> WEB["Deployment netscope-web (1 to 5 replicas)"]
+        HPA["HorizontalPodAutoscaler: 50% CPU target"] -.->|"scales"| WEB
+        WEB --> PGSVC["Service postgres :5432"]
+        WEB --> VKSVC["Service valkey :6379"]
+        WRK["Deployment netscope-worker"] --> PGSVC
+        WRK --> VKSVC
+        PGSVC --> PG["StatefulSet postgres"]
+        VKSVC --> VK["Deployment valkey"]
+        MIG["Job netscope-migration"] --> PGSVC
+        UP[("PVC uploads-pvc")]
+        PGV[("PVC postgres-data-postgres-0")]
+        WEB --- UP
+        WRK --- UP
+        PG --- PGV
+    end
+```
+
+Pods find each other through Kubernetes DNS names (`postgres:5432`, `valkey:6379`). The web and worker pods wait for PostgreSQL and Valkey in init containers, run as a non-root user, and have CPU and memory requests and limits. Migrations run as a finite Job rather than at web startup, so web replicas never race to change the schema.
+
+### Quick start
+
+With Minikube running and the image built, from the repository root:
+
+```bash
+minikube image load netscope:local
+kubectl apply -f k8s/namespace.yaml
+kubectl create secret generic netscope-secrets \
+  --namespace netscope \
+  --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 24)" \
+  --from-literal=NETSCOPE_SECRET_KEY="$(openssl rand -base64 48)"
+kubectl apply -f k8s/configmap.yaml -f k8s/storage.yaml
+kubectl apply -f k8s/postgres.yaml -f k8s/valkey.yaml
+kubectl apply -f k8s/migration.yaml
+kubectl wait --for=condition=complete job/netscope-migration -n netscope --timeout=180s
+kubectl apply -f k8s/web.yaml -f k8s/worker.yaml
+kubectl port-forward -n netscope service/netscope-web 8001:8000
+```
+
+Then check `curl -i http://localhost:8001/api/v1/health`, which should return `200` with `{"status": "healthy"}`. Wait for PostgreSQL and Valkey to become ready before applying the migration Job; [`k8s/README.md`](k8s/README.md) gives the individual `rollout status` commands. Use a hex password, because the manifests place it inside the database URL.
+
+> **Secure cookies over plain HTTP.** The manifests set `NETSCOPE_ENV=production`, so the session cookie is marked `Secure`. Browsers may not send it over `http://localhost`, so signing in through the web interface via a port-forward is not guaranteed to work. The guide's end-to-end script uses `curl`, which does send it; for browser use, terminate HTTPS in front of the Service.
+
+An end-to-end run in the cluster (upload, queue, analysis) completed with a test capture of 531 packets and 25 flows, which confirms that the web app, shared upload volume, PostgreSQL, Valkey, Celery and Scapy work together.
+
+### Autoscaling and load testing
+
+`hpa.yaml` scales only the **web** Deployment, between 1 and 5 replicas, to keep average CPU at 50% of the pod's CPU request (100m). It needs Metrics Server in the cluster. PostgreSQL, Valkey and the Celery worker stay at a single replica.
+
+[Locust](https://locust.io/) (`load-testing/locustfile.py`, run from its own `.venv-locust` virtual environment) sent requests to `GET /api/v1/health` with 50 simulated users spawning at 5 per second for about two minutes. During the run the HPA scaled the Deployment from 1 to 2 to 4 to 5 replicas without manual intervention and, after the load stopped, back to 1 once the default 300-second scale-down window had passed. The run served 18,009 requests at about 165 requests per second with a median response time of 18 ms.
+
+Read these results with the following caveats, which [`k8s/README.md`](k8s/README.md) explains in full:
+
+- **21.49% of requests failed (3,871 of 18,009) and the cause has not been established.** The test demonstrates autoscaling; it is not a validated reliability result.
+- **`kubectl port-forward` is not load balancing.** It tunnels to a single pod, so the replicas the HPA added did not receive Locust traffic. Measuring scaled throughput needs load sent from inside the cluster or through a NodePort or Ingress, none of which is configured here.
+- **Only the stateless health endpoint was tested.** Upload, analysis and database-heavy paths were not load-tested.
+
+### Kubernetes scope and limits
+
+- Implemented: everything in the manifest table above, Secret-based credentials, health probes on the web pod, resource requests and limits, non-root pods and CPU-based autoscaling of the web tier.
+- Not implemented: an Ingress, TLS, autoscaling of the Celery worker, load tests of upload and analysis, and investigation of the load-test failures.
+- Valkey has no persistent volume, so queued tasks are lost if its pod restarts. A capture whose task was lost can stay `pending`; the retry endpoint accepts only `uploaded` or `failed` captures, so it must be deleted and uploaded again.
+- `uploads-pvc` is `ReadWriteOnce`, which works on a single node. Spreading web replicas across several nodes would need `ReadWriteMany` storage.
+- `kubectl delete namespace netscope` removes the PersistentVolumeClaims and therefore the database and uploaded captures (unless your StorageClass retains the volumes). Back up first.
+
+---
+
+## Ansible Automation
+
+The `ansible/` directory automates the Kubernetes deployment above for a **local Minikube cluster**. Instead of typing the `kubectl` sequence by hand, three playbooks check the environment, apply the manifests from `k8s/` in dependency order, and report the result. Ansible runs against `localhost` only; remote or SSH-based deployment is not implemented.
+
+> **This section is a summary.** Configuration files, the task-by-task description of each playbook, recorded test results and troubleshooting are in [`ansible/README.md`](ansible/README.md).
+
+| Playbook | Purpose |
+|---|---|
+| `prerequisites.yml` | Read-only check of Minikube, `kubectl`, the current context (must be `minikube`), nodes, namespace, Secret and persistent claims. Changes nothing. |
+| `deploy.yml` | Applies the namespace, ConfigMap, storage, PostgreSQL, Valkey, migration Job, web, worker and HPA manifests in order, waiting for each stage. A completed migration Job is skipped unless you pass `-e rerun_migrations=true`. |
+| `verify.yml` | Read-only report of workloads, claims, Jobs, the HPA and pod resource metrics. It displays state; it does not assert that everything is ready. |
+
+Run the playbooks from the `ansible/` directory so that `ansible.cfg` and `inventory.ini` are found:
+
+```bash
+cd ansible
+ansible-playbook playbooks/prerequisites.yml
+ansible-playbook playbooks/deploy.yml
+ansible-playbook playbooks/verify.yml
+```
+
+The playbooks do **not** start Minikube, build or load the `netscope:local` image, install Metrics Server, or create the `netscope-secrets` Secret; do those first. On a cluster where NetScope has never been deployed, create the namespace and the Secret before `deploy.yml`, because `prerequisites.yml` expects them to exist (see "First-time deployment" in [`ansible/README.md`](ansible/README.md)).
+
+Things to know before using them:
+
+- Only `prerequisites.yml` checks the Kubernetes context. `deploy.yml` applies to whichever context is current, so run the prerequisites playbook first if you use several clusters.
+- Re-running `deploy.yml` while the HPA has scaled the web Deployment resets it to one replica, because `web.yaml` declares `replicas: 1`; the HPA then scales it up again if load persists.
+- No playbook deletes a PersistentVolumeClaim or any database storage. The only deletion is the migration Job.
+- Tested with Ansible Core 2.22.0, kubectl 1.37.2 and Minikube 1.38.1 on Fedora Linux.
+
 ---
 
 ## Configuration Reference
@@ -1027,7 +1160,7 @@ uv run pytest tests/e2e
 ## Operational Notes
 
 - **Two process types.** The web process (Flask) and one or more Celery workers must share the database, the broker and, because the worker reads uploaded files from disk, the upload folder. If web and worker run on different machines, `NETSCOPE_UPLOAD_FOLDER` must point at storage both can reach.
-- **Production-style serving.** `gunicorn` is a declared dependency (for example `uv run python -m gunicorn --chdir backend wsgi:app`), and the repository includes a local Docker Compose setup (see [Docker Deployment](#docker-deployment)). NetScope is not described here as hosted anywhere. Run it behind HTTPS with `NETSCOPE_ENV=production` and a real `NETSCOPE_SECRET_KEY`.
+- **Production-style serving.** `gunicorn` is a declared dependency (for example `uv run python -m gunicorn --chdir backend wsgi:app`), and the repository includes a local Docker Compose setup (see [Docker Deployment](#docker-deployment)), Kubernetes manifests for a Minikube cluster (see [Kubernetes Deployment](#kubernetes-deployment)) and Ansible playbooks that apply them (see [Ansible Automation](#ansible-automation)). NetScope is not described here as hosted anywhere. Run it behind HTTPS with `NETSCOPE_ENV=production` and a real `NETSCOPE_SECRET_KEY`.
 - **Resource use.** Analysis speed is bounded by Scapy's dissection. Memory grows with the number of distinct flows, connections, DNS transactions and addresses, not with packet count. Size `NETSCOPE_MAX_UPLOAD_BYTES` and `NETSCOPE_MAX_PACKETS` for your hardware, and give workers enough time for your largest expected capture.
 - **Uploads and secrets.** Capture files are stored under the upload folder and are git-ignored (`*.pcap`, `*.pcapng`, `instance/`). `.env` files are git-ignored; never commit credentials. Treat uploaded captures as sensitive data.
 - **Progress.** While a capture is `processing`, `packet_count` advances after every stored batch, so progress is a packet count, not a percentage (the total is unknown until the file has been read).
@@ -1057,6 +1190,7 @@ uv run pytest tests/e2e
 - **Dashboard** protocol distribution uses the user's 100 most recent analysed captures.
 - **Not implemented:** live capture, login rate limiting, email verification, password reset.
 - **Not covered by automated tests:** a live PostgreSQL and a live broker (see [Testing and Validation](#testing-and-validation)).
+- **Kubernetes and Ansible:** verified on a single-node Minikube cluster only. There is no Ingress or TLS, the load test covered only the health endpoint and showed an unexplained failure rate, and the Ansible playbooks work against `localhost` only (see [Kubernetes scope and limits](#kubernetes-scope-and-limits)).
 
 
 ## Contributing
